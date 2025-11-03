@@ -1,0 +1,51 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "nodemon --watch src --exec ts-node src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "db:test": "ts-node src/scripts/dbTest.ts",
+    "db:init": "ts-node src/scripts/initDB.ts",
+    "db:migrate-role": "ts-node src/scripts/addRoleColumn.ts",
+    "db:migrate-features": "ts-node src/scripts/migrateGroupFeatures.ts",
+    "db:migrate-status": "ts-node src/scripts/addGroupStatusColumn.ts",
+    "db:migrate-shares": "ts-node src/scripts/migrateGroupUserShares.ts",
+    "db:migrate-can-invite": "ts-node src/scripts/migrateCanInvite.ts",
+    "db:migrate-user-status": "ts-node src/scripts/migrateUserStatus.ts",
+    "db:migrate-invite-link": "ts-node src/scripts/migrateInviteLink.ts",
+    "db:seed": "ts-node src/scripts/seedDB.ts",
+    "db:seed-features": "ts-node src/scripts/createDefaultFeatures.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "i18next": "^25.6.0",
+    "i18next-http-middleware": "^3.8.1",
+    "jsonwebtoken": "^9.0.2",
+    "node-cron": "^4.2.1",
+    "pg": "^8.16.3",
+    "pg-hstore": "^2.3.4",
+    "sequelize": "^6.37.7",
+    "socket.io": "^4.8.1",
+    "twilio": "^5.10.4"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^24.9.2",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
