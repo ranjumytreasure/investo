@@ -99,12 +99,21 @@ export default function GroupDetail() {
     const [showEditAuction, setShowEditAuction] = useState(false)
     const [editingAuction, setEditingAuction] = useState(false)
     const [editAuctionError, setEditAuctionError] = useState<string | null>(null)
+    const [accountDetails, setAccountDetails] = useState<any>(null)
+    const [loadingAccounts, setLoadingAccounts] = useState(false)
+    const [showPaymentDetails, setShowPaymentDetails] = useState<string | null>(null) // account_id to show payment details
 
     useEffect(() => {
         if (id) {
             fetchGroupDetail()
         }
     }, [id])
+
+    useEffect(() => {
+        if (id && groupDetail && groupDetail.group.status === 'inprogress') {
+            fetchAccountDetails()
+        }
+    }, [id, groupDetail?.group?.status])
 
     async function fetchGroupDetail() {
         setLoading(true)
@@ -135,6 +144,29 @@ export default function GroupDetail() {
             setError('Failed to load group details')
         } finally {
             setLoading(false)
+        }
+    }
+
+    async function fetchAccountDetails() {
+        if (!id) return
+        setLoadingAccounts(true)
+        try {
+            const headers: Record<string, string> = {}
+            if (state.token) {
+                headers['Authorization'] = `Bearer ${state.token}`
+            }
+
+            const response = await fetch(`/groups/${id}/accounts`, { headers })
+            if (response.ok) {
+                const data = await response.json()
+                setAccountDetails(data)
+            } else {
+                console.error('Error loading account details')
+            }
+        } catch (err) {
+            console.error('Error fetching account details:', err)
+        } finally {
+            setLoadingAccounts(false)
         }
     }
 
@@ -558,6 +590,7 @@ export default function GroupDetail() {
             </div>
 
             {/* Dashboard KPI Cards - Top Row - Horizontal Layout - Condensed */}
+            {group.status !== 'inprogress' && (
             <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
                 {/* Group Amount Card - Condensed */}
                 <div style={{
@@ -619,8 +652,10 @@ export default function GroupDetail() {
                     </div>
                 </div>
             </div>
+            )}
 
             {/* Condensed Info Bar - Compressed Details */}
+            {group.status !== 'inprogress' && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
                 {/* Group Details - Condensed */}
                 <div style={{
@@ -749,6 +784,218 @@ export default function GroupDetail() {
                     </div>
                 </div>
             </div>
+            )}
+
+            {/* Account Details Section - For Inprogress Groups */}
+            {groupDetail && groupDetail.group.status === 'inprogress' && (
+                <div style={{ marginBottom: 24 }}>
+                    <div style={{
+                        border: '1px solid #e5e7eb',
+                        borderRadius: 12,
+                        padding: 20,
+                        background: '#ffffff',
+                        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
+                    }}>
+                        <h2 style={{ margin: '0 0 20px 0', fontSize: '1.5rem', fontWeight: 700, color: '#1e293b' }}>
+                            Group Account Details
+                        </h2>
+                        
+                        {loadingAccounts ? (
+                            <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>Loading account details...</div>
+                        ) : accountDetails && accountDetails.accounts && accountDetails.accounts.length > 0 ? (
+                            <>
+                                {/* Account Details Table */}
+                                <div style={{ overflowX: 'auto' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                        <thead>
+                                            <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
+                                                <th style={{ padding: '12px', textAlign: 'left', fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>S.No</th>
+                                                <th style={{ padding: '12px', textAlign: 'left', fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>Auction Date</th>
+                                                <th style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>Auction Amount</th>
+                                                <th style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>Commission</th>
+                                                <th style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>Profit/Person</th>
+                                                <th style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>Due</th>
+                                                <th style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>Cash to Customer</th>
+                                                <th style={{ padding: '12px', textAlign: 'center', fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>Payment Progress</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {accountDetails.accounts.map((account: any) => (
+                                                <tr key={account.account_id} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                                    <td style={{ padding: '12px', fontSize: '0.875rem', color: '#1e293b' }}>{account.s_no}</td>
+                                                    <td style={{ padding: '12px', fontSize: '0.875rem', color: '#1e293b' }}>
+                                                        {new Date(account.auction_date).toLocaleDateString('en-US', {
+                                                            year: 'numeric',
+                                                            month: 'short',
+                                                            day: 'numeric'
+                                                        })}
+                                                    </td>
+                                                    <td style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
+                                                        ₹{account.auction_amount.toLocaleString('en-IN')}
+                                                    </td>
+                                                    <td style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', color: '#64748b' }}>
+                                                        ₹{account.commission.toLocaleString('en-IN')}
+                                                    </td>
+                                                    <td style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', color: '#16a34a', fontWeight: 600 }}>
+                                                        ₹{account.profit_per_person.toLocaleString('en-IN')}
+                                                    </td>
+                                                    <td style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', color: '#dc2626', fontWeight: 600 }}>
+                                                        ₹{account.due.toLocaleString('en-IN')}
+                                                    </td>
+                                                    <td style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', color: '#2563eb', fontWeight: 600 }}>
+                                                        ₹{account.cash_to_customer.toLocaleString('en-IN')}
+                                                    </td>
+                                                    <td style={{ padding: '12px', textAlign: 'center' }}>
+                                                        <div
+                                                            onClick={() => setShowPaymentDetails(showPaymentDetails === account.account_id ? null : account.account_id)}
+                                                            style={{
+                                                                cursor: 'pointer',
+                                                                padding: '8px 12px',
+                                                                background: '#f8fafc',
+                                                                borderRadius: 8,
+                                                                border: '1px solid #e5e7eb',
+                                                                transition: 'all 0.2s',
+                                                                minWidth: '200px'
+                                                            }}
+                                                            onMouseEnter={(e) => {
+                                                                e.currentTarget.style.background = '#f1f5f9'
+                                                                e.currentTarget.style.borderColor = '#cbd5e1'
+                                                            }}
+                                                            onMouseLeave={(e) => {
+                                                                e.currentTarget.style.background = '#f8fafc'
+                                                                e.currentTarget.style.borderColor = '#e5e7eb'
+                                                            }}
+                                                        >
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                                                <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 500 }}>
+                                                                    {account.paid_count} paid / {account.paid_count + account.not_paid_count} total
+                                                                </span>
+                                                                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                                    {showPaymentDetails === account.account_id ? '▼' : '▶'}
+                                                                </span>
+                                                            </div>
+                                                            <div style={{
+                                                                height: 8,
+                                                                background: '#e5e7eb',
+                                                                borderRadius: 9999,
+                                                                overflow: 'hidden',
+                                                                position: 'relative'
+                                                            }}>
+                                                                <div style={{
+                                                                    width: `${((account.paid_count) / (account.paid_count + account.not_paid_count || 1)) * 100}%`,
+                                                                    height: '100%',
+                                                                    background: account.not_paid_count === 0 
+                                                                        ? '#16a34a' 
+                                                                        : 'linear-gradient(90deg, #16a34a 0%, #f59e0b 100%)',
+                                                                    borderRadius: 9999,
+                                                                    transition: 'width 0.3s ease'
+                                                                }} />
+                                                            </div>
+                                                            {showPaymentDetails === account.account_id && account.receivables && account.receivables.length > 0 && (
+                                                                <div style={{
+                                                                    marginTop: 12,
+                                                                    padding: 12,
+                                                                    background: '#ffffff',
+                                                                    borderRadius: 8,
+                                                                    border: '1px solid #e5e7eb',
+                                                                    maxHeight: '300px',
+                                                                    overflowY: 'auto'
+                                                                }}>
+                                                                    <div style={{ marginBottom: 12 }}>
+                                                                        <h4 style={{ margin: '0 0 8px 0', fontSize: '0.875rem', fontWeight: 700, color: '#1e293b' }}>
+                                                                            Paid ({account.paid_count})
+                                                                        </h4>
+                                                                        {account.receivables.filter((r: any) => r.status === 'paid').length > 0 ? (
+                                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                                                                {account.receivables.filter((r: any) => r.status === 'paid').map((r: any) => (
+                                                                                    <div key={r.id} style={{
+                                                                                        padding: '8px 12px',
+                                                                                        background: '#f0fdf4',
+                                                                                        borderRadius: 6,
+                                                                                        border: '1px solid #bbf7d0',
+                                                                                        display: 'flex',
+                                                                                        justifyContent: 'space-between',
+                                                                                        alignItems: 'center'
+                                                                                    }}>
+                                                                                        <div>
+                                                                                            <div style={{ fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
+                                                                                                {r.user_name} {r.share_no ? `(Share #${r.share_no})` : ''}
+                                                                                            </div>
+                                                                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                                                                {r.user_phone}
+                                                                                            </div>
+                                                                                        </div>
+                                                                                        <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#16a34a' }}>
+                                                                                            ₹{r.expected_amount.toLocaleString('en-IN')}
+                                                                                        </div>
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div style={{ fontSize: '0.875rem', color: '#64748b', fontStyle: 'italic' }}>
+                                                                                No payments received yet
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                    <div>
+                                                                        <h4 style={{ margin: '0 0 8px 0', fontSize: '0.875rem', fontWeight: 700, color: '#1e293b' }}>
+                                                                            Not Paid ({account.not_paid_count})
+                                                                        </h4>
+                                                                        {account.receivables.filter((r: any) => r.status !== 'paid').length > 0 ? (
+                                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                                                                {account.receivables.filter((r: any) => r.status !== 'paid').map((r: any) => (
+                                                                                    <div key={r.id} style={{
+                                                                                        padding: '8px 12px',
+                                                                                        background: '#fef2f2',
+                                                                                        borderRadius: 6,
+                                                                                        border: '1px solid #fecaca',
+                                                                                        display: 'flex',
+                                                                                        justifyContent: 'space-between',
+                                                                                        alignItems: 'center'
+                                                                                    }}>
+                                                                                        <div>
+                                                                                            <div style={{ fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
+                                                                                                {r.user_name} {r.share_no ? `(Share #${r.share_no})` : ''}
+                                                                                            </div>
+                                                                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                                                                {r.user_phone}
+                                                                                            </div>
+                                                                                            {r.due_date && (
+                                                                                                <div style={{ fontSize: '0.75rem', color: '#dc2626', marginTop: 2 }}>
+                                                                                                    Due: {new Date(r.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                                                                                </div>
+                                                                                            )}
+                                                                                        </div>
+                                                                                        <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#dc2626' }}>
+                                                                                            ₹{r.expected_amount.toLocaleString('en-IN')}
+                                                                                        </div>
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div style={{ fontSize: '0.875rem', color: '#64748b', fontStyle: 'italic' }}>
+                                                                                All payments received
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </>
+                        ) : (
+                            <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>
+                                No account details available yet
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Auction Component */}
             {groupDetail && (

@@ -925,41 +925,6 @@ export default function Home() {
                                                             </div>
                                                         )}
 
-                                                        {/* Add Members Button */}
-                                                        {pendingMembers > 0 && (
-                                                            <div style={{ flex: '0 0 auto' }}>
-                                                                <Link
-                                                                    to={`/groups/${group.id}`}
-                                                                    className="pending-members-button"
-                                                                    style={{
-                                                                        display: 'inline-block',
-                                                                        padding: '8px 16px',
-                                                                        fontSize: '0.75rem',
-                                                                        background: '#10b981',
-                                                                        color: '#fff',
-                                                                        borderRadius: 8,
-                                                                        textDecoration: 'none',
-                                                                        textAlign: 'center',
-                                                                        fontWeight: 600,
-                                                                        border: '1px solid #059669',
-                                                                        transition: 'all 0.2s',
-                                                                        whiteSpace: 'nowrap'
-                                                                    }}
-                                                                    onClick={(e) => e.stopPropagation()}
-                                                                    onMouseEnter={(e) => {
-                                                                        e.currentTarget.style.background = '#059669'
-                                                                        e.currentTarget.style.animation = 'none'
-                                                                    }}
-                                                                    onMouseLeave={(e) => {
-                                                                        e.currentTarget.style.background = '#10b981'
-                                                                        e.currentTarget.style.animation = 'pulse-glow-bounce 2.5s ease-in-out infinite'
-                                                                    }}
-                                                                >
-                                                                    Add {pendingMembers} member{pendingMembers !== 1 ? 's' : ''}
-                                                                </Link>
-                                                            </div>
-                                                        )}
-
                                                         {/* Auction Status Badge for inprogress groups */}
                                                         {group.status === 'inprogress' && group.auction_status && (
                                                             <div style={{ flex: '0 0 auto' }}>
@@ -1047,7 +1012,41 @@ export default function Home() {
                                                                         >
                                                                             {group.auction_status === 'open' ? '🚀 Participate' : 'View'}
                                                                         </Link>
+                                                                    ) : group.status === 'new' ? (
+                                                                        // For new groups, only show "Add X members" button if there are pending members
+                                                                        pendingMembers > 0 ? (
+                                                                            <Link
+                                                                                to={`/groups/${group.id}`}
+                                                                                className="pending-members-button"
+                                                                                style={{
+                                                                                    display: 'inline-block',
+                                                                                    padding: '8px 16px',
+                                                                                    fontSize: '0.75rem',
+                                                                                    background: '#10b981',
+                                                                                    color: '#fff',
+                                                                                    borderRadius: 8,
+                                                                                    textDecoration: 'none',
+                                                                                    textAlign: 'center',
+                                                                                    fontWeight: 600,
+                                                                                    border: '1px solid #059669',
+                                                                                    transition: 'all 0.2s',
+                                                                                    whiteSpace: 'nowrap'
+                                                                                }}
+                                                                                onClick={(e) => e.stopPropagation()}
+                                                                                onMouseEnter={(e) => {
+                                                                                    e.currentTarget.style.background = '#059669'
+                                                                                    e.currentTarget.style.animation = 'none'
+                                                                                }}
+                                                                                onMouseLeave={(e) => {
+                                                                                    e.currentTarget.style.background = '#10b981'
+                                                                                    e.currentTarget.style.animation = 'pulse-glow-bounce 2.5s ease-in-out infinite'
+                                                                                }}
+                                                                            >
+                                                                                Add {pendingMembers} member{pendingMembers !== 1 ? 's' : ''}
+                                                                            </Link>
+                                                                        ) : null
                                                                     ) : (
+                                                                        // For closed groups, show Manage Features and Delete (if creator)
                                                                         <>
                                                                             <Link
                                                                                 to={`/groups/${group.id}/features`}
@@ -1191,25 +1190,6 @@ export default function Home() {
                                                             </span>
                                                         </div>
                                                     )}
-                                                    {pendingMembers > 0 && (
-                                                        <button
-                                                            onClick={() => navigate(`/groups/${group.id}`)}
-                                                            className="pending-members-button"
-                                                            style={{
-                                                                padding: '6px 12px',
-                                                                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                                                                color: '#fff',
-                                                                border: 'none',
-                                                                borderRadius: 6,
-                                                                fontSize: '0.75rem',
-                                                                fontWeight: 700,
-                                                                cursor: 'pointer',
-                                                                boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
-                                                            }}
-                                                        >
-                                                            Add {pendingMembers} member{pendingMembers !== 1 ? 's' : ''}
-                                                        </button>
-                                                    )}
                                                 </div>
 
                                                 {/* Auction Status and View Button for inprogress groups */}
@@ -1300,7 +1280,30 @@ export default function Home() {
                                                             {group.auction_status === 'open' ? '🚀 Participate Now' : 'View'}
                                                         </Link>
                                                     </div>
+                                                ) : group.status === 'new' ? (
+                                                    // For new groups, only show "Add X members" button if there are pending members
+                                                    pendingMembers > 0 ? (
+                                                        <button
+                                                            onClick={() => navigate(`/groups/${group.id}`)}
+                                                            className="pending-members-button"
+                                                            style={{
+                                                                width: '100%',
+                                                                padding: '10px 16px',
+                                                                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                                                color: '#fff',
+                                                                border: 'none',
+                                                                borderRadius: 8,
+                                                                fontSize: '0.875rem',
+                                                                fontWeight: 700,
+                                                                cursor: 'pointer',
+                                                                boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
+                                                            }}
+                                                        >
+                                                            Add {pendingMembers} member{pendingMembers !== 1 ? 's' : ''}
+                                                        </button>
+                                                    ) : null
                                                 ) : (
+                                                    // For closed groups, show View and Details buttons
                                                     <div style={{ display: 'flex', gap: 8 }}>
                                                         <Link
                                                             to={`/groups/${group.id}`}

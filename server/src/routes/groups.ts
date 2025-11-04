@@ -2343,6 +2343,98 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
         }
     });
 
+    // Get group account details with payment status
+    app.get('/groups/:id/accounts', async (req, res) => {
+        try {
+            const { id: groupId } = req.params;
+
+            // Get all group accounts for this group
+            const groupAccounts = await GroupAccount.findAll({
+                where: {
+                    group_id: groupId
+                },
+                order: [['created_at', 'DESC']]
+            });
+
+            // Get receivables for payment tracking
+            const receivables = await Receivable.findAll({
+                where: {
+                    group_id: groupId
+                },
+                include: [
+                    {
+                        model: User,
+                        attributes: ['id', 'name', 'phone']
+                    },
+                    {
+                        model: GroupUserShare,
+                        attributes: ['id', 'share_no', 'share_percent', 'user_id'],
+                        required: false
+                    }
+                ]
+            });
+
+            // Calculate payment stats
+            const paidCount = receivables.filter(r => r.status === 'paid').length;
+            const notPaidCount = receivables.filter(r => r.status !== 'paid').length;
+
+            // Format account data with payment info
+            const accountsData = await Promise.all(
+                groupAccounts.map(async (account, index) => {
+                    const accountReceivables = receivables.filter(r => {
+                        // Match receivables to this account (you may need to adjust this logic based on your data model)
+                        return true; // For now, show all receivables for the group
+                    });
+
+                    // Calculate total due (sum of expected_amount from unpaid receivables)
+                    const totalDue = accountReceivables
+                        .filter(r => r.status !== 'paid')
+                        .reduce((sum, r) => sum + parseFloat(r.expected_amount.toString()), 0);
+
+                    return {
+                        s_no: index + 1,
+                        account_id: account.id,
+                        auction_date: account.created_at,
+                        auction_amount: parseFloat(account.auction_amount.toString()),
+                        commission: parseFloat(account.commission.toString()),
+                        profit_per_person: parseFloat(account.profit_per_person.toString()),
+                        due: totalDue,
+                        cash_to_customer: parseFloat(account.cash_to_customer.toString()),
+                        balance: parseFloat(account.balance.toString()),
+                        status: account.status,
+                        winner_share_id: account.winner_share_id,
+                        paid_count: accountReceivables.filter(r => r.status === 'paid').length,
+                        not_paid_count: accountReceivables.filter(r => r.status !== 'paid').length,
+                        receivables: accountReceivables.map(r => ({
+                            id: r.id,
+                            user_id: r.user_id,
+                            user_name: (r as any).User?.name || 'Unknown',
+                            user_phone: (r as any).User?.phone || 'Unknown',
+                            share_no: (r as any).GroupUserShare?.share_no || null,
+                            expected_amount: parseFloat(r.expected_amount.toString()),
+                            due_date: r.due_date,
+                            status: r.status
+                        }))
+                    };
+                })
+            );
+
+            return res.json({
+                accounts: accountsData,
+                summary: {
+                    total_accounts: groupAccounts.length,
+                    total_paid: paidCount,
+                    total_not_paid: notPaidCount
+                }
+            });
+        } catch (error: any) {
+            console.error('Error fetching group accounts:', error);
+            return res.status(400).json({
+                message: error.message || 'Failed to fetch group accounts'
+            });
+        }
+    });
+
     // Get current auction status for a group
     app.get('/groups/:id/auction', async (req, res) => {
         try {

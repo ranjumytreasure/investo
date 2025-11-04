@@ -57,6 +57,8 @@ Group.hasMany(Receivable, { foreignKey: 'group_id' });
 Receivable.belongsTo(Group, { foreignKey: 'group_id' });
 User.hasMany(Receivable, { foreignKey: 'user_id' });
 Receivable.belongsTo(User, { foreignKey: 'user_id' });
+GroupUserShare.hasMany(Receivable, { foreignKey: 'group_share_id' });
+Receivable.belongsTo(GroupUserShare, { foreignKey: 'group_share_id' });
 Receivable.hasMany(Receipt, { foreignKey: 'receivable_id' });
 Receipt.belongsTo(Receivable, { foreignKey: 'receivable_id' });
 User.hasMany(Receipt, { foreignKey: 'user_id' });
