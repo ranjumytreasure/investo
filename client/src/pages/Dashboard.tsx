@@ -4,7 +4,7 @@ import { io, Socket } from 'socket.io-client'
 import Confetti from 'react-confetti'
 
 export default function Dashboard() {
-    const [socket, setSocket] = useState<Socket | null>(null)
+    const [, setSocket] = useState<Socket | null>(null)
     const [celebrate, setCelebrate] = useState(false)
 
     useEffect(() => {

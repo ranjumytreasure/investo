@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, ReactNode, useMemo, useEffect } from 'react'
+import React, { createContext, useContext, useReducer, useMemo, useEffect, type ReactNode } from 'react'
 
 type AuthState = {
     token: string | null
@@ -26,7 +26,10 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         case 'SET_ROLE':
             return { ...state, role: action.role }
         case 'SET_PROFILE':
-            return { ...state, name: action.name ?? state.name, avatarUrl: action.avatarUrl ?? state.avatarUrl }
+            console.log('[AuthContext] SET_PROFILE action:', { name: action.name, avatarUrl: action.avatarUrl, currentState: state })
+            const newState = { ...state, name: action.name ?? state.name, avatarUrl: action.avatarUrl ?? state.avatarUrl }
+            console.log('[AuthContext] New state after SET_PROFILE:', newState)
+            return newState
         case 'LOGOUT':
             return { token: null, phone: null, role: null, name: null, avatarUrl: null }
         default:
@@ -69,6 +72,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorageToken: localStorage.getItem('token') ? 'exists' : 'missing'
         })
     }, []) // Run only once on mount
+
+    // Fetch user profile name if logged in but name is not set
+    useEffect(() => {
+        const token = state.token || localStorage.getItem('token')
+        if (token && !state.name) {
+            // Fetch profile to get user name
+            fetch('/profile', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data?.user?.name) {
+                        dispatch({ type: 'SET_PROFILE', name: data.user.name })
+                    }
+                })
+                .catch(err => {
+                    console.error('[AuthContext] Failed to fetch profile:', err)
+                })
+        }
+    }, [state.token, state.name, dispatch])
 
     // Sync localStorage with auth state changes
     useEffect(() => {

@@ -79,26 +79,72 @@ export function registerAuthRoutes(app: Express, io: SocketIOServer) {
 
 	app.post('/auth/login', async (req, res) => {
 		try {
+			console.log('🔐 Login attempt:', { phone: req.body?.phone, hasPin: !!req.body?.pin, pinLength: req.body?.pin?.length });
+			
 			const { phone, pin } = req.body as { phone: string; pin: string };
 			if (!phone || !pin) {
+				console.log('❌ Missing phone or pin');
 				return res.status(400).json({ error: 'phone and pin required' });
 			}
-			const user = await User.findOne({ where: { phone } });
-			if (!user || !user.pin) {
-				return res.status(400).json({ error: 'invalid' });
+			
+			// Trim and normalize phone number
+			const normalizedPhone = phone.trim();
+			if (!normalizedPhone) {
+				console.log('❌ Phone number is empty after trimming');
+				return res.status(400).json({ error: 'Phone number is required' });
 			}
-			if (user.status !== 'active') {
+			
+			console.log('🔍 Looking for user with phone:', normalizedPhone);
+			const user = await User.findOne({ where: { phone: normalizedPhone } });
+			
+			if (!user) {
+				console.log('❌ User not found with phone:', normalizedPhone);
+				// Also check if there's a user with similar phone (for debugging)
+				const allUsers = await User.findAll({ attributes: ['id', 'phone'], limit: 5 });
+				console.log('📋 Sample users in database:', allUsers.map(u => ({ id: u.id, phone: u.phone })));
+				return res.status(400).json({ error: 'Invalid phone number or PIN' });
+			}
+			
+			console.log('✅ User found:', { id: user.id, phone: user.phone, hasPin: !!user.pin, pinSet: user.pin_set, status: user.status });
+			
+			if (!user.pin) {
+				console.log('❌ User has no pin set. pin_set:', user.pin_set);
+				return res.status(400).json({ error: 'PIN not set. Please set your PIN first.' });
+			}
+			
+			// Check status - handle null/undefined status as 'active' for backward compatibility
+			const userStatus = user.status || 'active';
+			if (userStatus !== 'active') {
+				console.log('❌ User status is not active:', userStatus);
 				return res.status(403).json({ error: 'Account is not active. Please verify your invite via OTP first.' });
 			}
+			
+			console.log('🔐 Comparing PIN...');
 			const ok = await bcrypt.compare(pin, user.pin);
 			if (!ok) {
-				return res.status(400).json({ error: 'invalid' });
+				console.log('❌ PIN comparison failed for user:', user.id);
+				return res.status(400).json({ error: 'Invalid phone number or PIN' });
 			}
-			const token = jwt.sign({ sub: user.id }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
-			return res.json({ token, role: user.role });
+			
+			console.log('✅ PIN valid, generating token...');
+			const jwtSecret = process.env.JWT_SECRET || 'secret';
+			if (!jwtSecret || jwtSecret === 'secret') {
+				console.warn('⚠️ Using default JWT_SECRET - not recommended for production');
+			}
+			
+			const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: '7d' });
+			console.log('✅ Login successful for user:', user.id, 'phone:', user.phone);
+			return res.json({ 
+				token, 
+				role: user.role || 'user' // Ensure role is always a valid value
+			});
 		} catch (err: any) {
-			console.error('Login error:', err);
-			return res.status(500).json({ error: err.message || 'Internal server error' });
+			console.error('❌ Login error:', err);
+			console.error('Error stack:', err.stack);
+			return res.status(500).json({ 
+				error: err.message || 'Internal server error',
+				details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+			});
 		}
 	});
 }

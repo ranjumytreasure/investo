@@ -5,6 +5,7 @@ import { Op } from 'sequelize';
 import '../models/index';
 import { Group } from '../models/Group';
 import { GroupUserShare } from '../models/GroupUserShare';
+import { GroupAccount } from '../models/GroupAccount';
 import { Receivable } from '../models/Finance';
 import { GroupFeature } from '../models/GroupFeature';
 import { FeatureConfig } from '../models/FeatureConfig';
@@ -17,11 +18,125 @@ function generateOtp(): string {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+/**
+ * Check and update group status to 'inprogress' when all share numbers (1 to number_of_members) have at least one accepted/active share
+ * This means: number_of_members = number of share slots, and all slots must be allocated
+ */
+async function checkAndUpdateGroupStatus(groupId: string): Promise<void> {
+    try {
+        // Reload group to get latest data
+        const group = await Group.findByPk(groupId);
+        if (!group) {
+            console.log(`⚠️ Group ${groupId} not found for status check`);
+            return;
+        }
+
+        // Only check status for 'new' groups (groups that haven't started yet)
+        if (group.status !== 'new') {
+            console.log(`ℹ️ Group ${groupId} status is '${group.status}', not 'new' - skipping status check`);
+            return;
+        }
+
+        if (!group.number_of_members || group.number_of_members <= 0) {
+            console.log(`ℹ️ Group ${groupId} has invalid number_of_members (${group.number_of_members}) - skipping status check`);
+            return;
+        }
+
+        // Get all accepted/active shares (only count shares that are actually accepted/active, not pending)
+        const acceptedShares = await GroupUserShare.findAll({
+            where: {
+                group_id: groupId,
+                status: { [Op.in]: ['accepted', 'active'] }
+            },
+            attributes: ['share_no', 'status']
+        });
+
+        // Filter out any shares with null/undefined share_no and get unique share numbers
+        const validShareNumbers = acceptedShares
+            .map(s => s.share_no)
+            .filter((shareNo): shareNo is number => shareNo !== null && shareNo !== undefined && shareNo > 0);
+
+        const allocatedShareNumbers = new Set(validShareNumbers);
+
+        // Debug: Show which shares are accepted/active
+        console.log(`🔍 [Status Check] Group ${groupId} (${group.name}):`);
+        console.log(`   Found ${acceptedShares.length} accepted/active shares total`);
+        const sharesByNumber = acceptedShares.reduce((acc, s) => {
+            if (!acc[s.share_no]) acc[s.share_no] = [];
+            acc[s.share_no].push(s.status);
+            return acc;
+        }, {} as Record<number, string[]>);
+        console.log(`   Shares by number:`, sharesByNumber);
+
+        console.log(`   Allocated: ${allocatedShareNumbers.size}/${group.number_of_members} share slots`);
+        console.log(`   Allocated share numbers: [${Array.from(allocatedShareNumbers).sort((a, b) => a - b).join(', ')}]`);
+        console.log(`   Expected share numbers: [${Array.from({ length: group.number_of_members }, (_, i) => i + 1).join(', ')}]`);
+
+        // Check if all share numbers from 1 to number_of_members have at least one accepted/active share
+        let allSharesAllocated = true;
+        const missingShares: number[] = [];
+
+        for (let shareNo = 1; shareNo <= group.number_of_members; shareNo++) {
+            if (!allocatedShareNumbers.has(shareNo)) {
+                allSharesAllocated = false;
+                missingShares.push(shareNo);
+            }
+        }
+
+        if (allSharesAllocated) {
+            // Reload group one more time to ensure we have the latest status
+            const updatedGroup = await Group.findByPk(groupId);
+            if (!updatedGroup) {
+                console.error(`❌ Group ${groupId} not found after reload`);
+                return;
+            }
+
+            // Double-check status is still 'new' before updating
+            if (updatedGroup.status === 'new') {
+                updatedGroup.status = 'inprogress';
+                await updatedGroup.save();
+                console.log(`✅✅✅ Group ${groupId} (${updatedGroup.name}) status changed to 'inprogress' (all ${group.number_of_members} share slots allocated)`);
+                console.log(`   All share numbers ${Array.from(allocatedShareNumbers).sort((a, b) => a - b).join(', ')} have at least one accepted/active share`);
+            } else {
+                console.log(`⚠️ Group ${groupId} status changed to '${updatedGroup.status}' by another process, skipping update`);
+            }
+        } else {
+            console.log(`⏳ Group ${groupId} still needs shares for slots: [${missingShares.join(', ')}] (${allocatedShareNumbers.size}/${group.number_of_members} slots allocated)`);
+        }
+    } catch (error) {
+        console.error(`❌ Error checking group status for ${groupId}:`, error);
+        if (error instanceof Error) {
+            console.error(`   Error message: ${error.message}`);
+            console.error(`   Stack: ${error.stack}`);
+        }
+    }
+}
+
 export function registerGroupRoutes(app: Express, io: SocketIOServer) {
     // Get all groups with optional status filter
     // If user is authenticated, show groups created by them AND groups they are part of
     app.get('/groups', async (req, res) => {
         try {
+            // First, check and update status for all 'new' groups before fetching
+            // This ensures groups with all shares filled are moved to 'inprogress'
+            try {
+                const newGroups = await Group.findAll({
+                    where: { status: 'new' },
+                    attributes: ['id']
+                });
+
+                if (newGroups.length > 0) {
+                    console.log(`🔍 [Auto-check] Checking status for ${newGroups.length} groups with 'new' status...`);
+                    // Check each group (but don't wait for all to complete - do in parallel)
+                    Promise.all(newGroups.map(g => checkAndUpdateGroupStatus(g.id))).catch(err => {
+                        console.error('Error in parallel status check:', err);
+                    });
+                }
+            } catch (checkError) {
+                console.error('Error auto-checking group statuses:', checkError);
+                // Continue with fetching groups even if auto-check fails
+            }
+
             const { status } = req.query as { status?: string };
 
             const statusFilter: any = {};
@@ -50,7 +165,7 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                         ...statusFilter,
                         created_by: userId
                     },
-                    attributes: ['id', 'name', 'amount', 'status', 'type', 'first_auction_date', 'auction_frequency', 'number_of_members', 'billing_charges', 'created_by', 'created_at'],
+                    attributes: ['id', 'name', 'amount', 'status', 'type', 'first_auction_date', 'auction_frequency', 'number_of_members', 'billing_charges', 'auction_start_at', 'auction_end_at', 'created_by', 'created_at'],
                     order: [['created_at', 'DESC']]
                 });
 
@@ -72,7 +187,7 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                             id: { [Op.in]: joinedGroupIds },
                             created_by: { [Op.ne]: userId } // Exclude groups already in createdGroups
                         },
-                        attributes: ['id', 'name', 'amount', 'status', 'type', 'first_auction_date', 'auction_frequency', 'number_of_members', 'billing_charges', 'created_by', 'created_at'],
+                        attributes: ['id', 'name', 'amount', 'status', 'type', 'first_auction_date', 'auction_frequency', 'number_of_members', 'billing_charges', 'auction_start_at', 'auction_end_at', 'created_by', 'created_at'],
                         order: [['created_at', 'DESC']]
                     });
                 }
@@ -86,12 +201,13 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                     new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
                 );
 
-                // Add member statistics for each group
+                // Add member statistics and auction status for each group
+                const { GroupAccount } = require('../models/GroupAccount');
                 const groupsWithStats = await Promise.all(
                     allGroups.map(async (group) => {
                         const groupJson = group.toJSON ? group.toJSON() : group;
                         const totalMembers = groupJson.number_of_members || 0;
-                        
+
                         // Count added members (accepted or active shares)
                         const addedMembers = await GroupUserShare.count({
                             where: {
@@ -99,14 +215,32 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                                 status: { [Op.in]: ['accepted', 'active'] }
                             }
                         });
-                        
+
                         // Calculate pending members
                         const pendingMembers = totalMembers - addedMembers;
-                        
+
+                        // Check auction status from GroupAccount
+                        let auctionStatus: 'open' | 'closed' | 'no_auction' = 'no_auction';
+                        const groupAccount = await GroupAccount.findOne({
+                            where: {
+                                group_id: groupJson.id
+                            },
+                            order: [['created_at', 'DESC']] // Get the most recent account
+                        });
+
+                        if (groupAccount) {
+                            if (groupAccount.status === 'open') {
+                                auctionStatus = 'open';
+                            } else if (groupAccount.status === 'closed' || groupAccount.status === 'completed') {
+                                auctionStatus = 'closed';
+                            }
+                        }
+
                         return {
                             ...groupJson,
                             added_members: addedMembers,
-                            pending_members: pendingMembers > 0 ? pendingMembers : 0
+                            pending_members: pendingMembers > 0 ? pendingMembers : 0,
+                            auction_status: auctionStatus
                         };
                     })
                 );
@@ -116,16 +250,16 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                 // Not authenticated - show all groups (or none, depending on requirement)
                 const groups = await Group.findAll({
                     where: statusFilter,
-                    attributes: ['id', 'name', 'amount', 'status', 'type', 'first_auction_date', 'auction_frequency', 'number_of_members', 'billing_charges', 'created_by', 'created_at'],
+                    attributes: ['id', 'name', 'amount', 'status', 'type', 'first_auction_date', 'auction_frequency', 'number_of_members', 'billing_charges', 'auction_start_at', 'auction_end_at', 'created_by', 'created_at'],
                     order: [['created_at', 'DESC']]
                 });
 
-                // Add member statistics for each group
+                // Add member statistics and auction status for each group
                 const groupsWithStats = await Promise.all(
                     groups.map(async (group) => {
                         const groupJson = group.toJSON ? group.toJSON() : group;
                         const totalMembers = groupJson.number_of_members || 0;
-                        
+
                         // Count added members (accepted or active shares)
                         const addedMembers = await GroupUserShare.count({
                             where: {
@@ -133,14 +267,32 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                                 status: { [Op.in]: ['accepted', 'active'] }
                             }
                         });
-                        
+
                         // Calculate pending members
                         const pendingMembers = totalMembers - addedMembers;
-                        
+
+                        // Check auction status from GroupAccount
+                        let auctionStatus: 'open' | 'closed' | 'no_auction' = 'no_auction';
+                        const groupAccount = await GroupAccount.findOne({
+                            where: {
+                                group_id: groupJson.id
+                            },
+                            order: [['created_at', 'DESC']] // Get the most recent account
+                        });
+
+                        if (groupAccount) {
+                            if (groupAccount.status === 'open') {
+                                auctionStatus = 'open';
+                            } else if (groupAccount.status === 'closed' || groupAccount.status === 'completed') {
+                                auctionStatus = 'closed';
+                            }
+                        }
+
                         return {
                             ...groupJson,
                             added_members: addedMembers,
-                            pending_members: pendingMembers > 0 ? pendingMembers : 0
+                            pending_members: pendingMembers > 0 ? pendingMembers : 0,
+                            auction_status: auctionStatus
                         };
                     })
                 );
@@ -218,16 +370,23 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
             let currentUserId: string | null = null;
             try {
                 const authHeader = req.headers['authorization'];
+                console.log(`🔍 [Group Creation] Authorization header: ${authHeader ? 'Present' : 'Missing'}`);
                 const token = authHeader && authHeader.split(' ')[1];
                 if (token) {
                     const jwt = require('jsonwebtoken');
                     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as { sub: string };
                     currentUserId = decoded.sub;
                     console.log(`✅ Extracted user ID from token: ${currentUserId}`);
+                } else {
+                    console.warn('⚠️ No token found in Authorization header');
                 }
-            } catch (e) {
-                console.warn('⚠️ Could not extract user from token:', e);
+            } catch (e: any) {
+                console.warn('⚠️ Could not extract user from token:', e.message || e);
                 // Token not available or invalid
+            }
+
+            if (!currentUserId) {
+                console.error('❌ [Group Creation] No user ID extracted - created_by and updated_by will be NULL');
             }
 
             // Determine created_by: prioritize authenticated user from token, then fallback to body parameter
@@ -246,10 +405,11 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                 billing_charges: billingCharges,
                 number_of_members: number_of_members || null,
                 auction_frequency: auction_frequency || null,
-                created_by: finalCreatedBy // Set created_by from authenticated user or valid body parameter
+                created_by: finalCreatedBy, // Set created_by from authenticated user or valid body parameter
+                updated_by: finalCreatedBy // Set updated_by to same as created_by on creation
             };
 
-            console.log(`📝 Creating group with created_by: ${finalCreatedBy || 'null'}`);
+            console.log(`📝 Creating group with created_by: ${finalCreatedBy || 'null'}, updated_by: ${finalCreatedBy || 'null'}`);
 
             // Handle first_auction_date
             if (first_auction_date) {
@@ -275,7 +435,24 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
             }
 
             const group = await Group.create(groupData);
-            console.log(`✅ Group created: ${group.id} by user ${group.created_by || 'unknown'}`);
+            console.log(`✅ Group created: ${group.id}`);
+            console.log(`   created_by: ${group.created_by || 'NULL'}`);
+            console.log(`   updated_by: ${group.updated_by || 'NULL'}`);
+
+            // Verify the values were actually saved
+            const verifyGroup = await Group.findByPk(group.id, { attributes: ['id', 'name', 'created_by', 'updated_by'] });
+            if (verifyGroup) {
+                console.log(`🔍 Verification - Group ${verifyGroup.id}:`);
+                console.log(`   created_by in DB: ${verifyGroup.created_by || 'NULL'}`);
+                console.log(`   updated_by in DB: ${verifyGroup.updated_by || 'NULL'}`);
+
+                // If values are still null, try to update them
+                if (!verifyGroup.created_by && finalCreatedBy) {
+                    console.log(`⚠️ created_by is null, attempting to update...`);
+                    await verifyGroup.update({ created_by: finalCreatedBy, updated_by: finalCreatedBy });
+                    console.log(`✅ Updated created_by and updated_by to ${finalCreatedBy}`);
+                }
+            }
 
             // Save selected features to group_features table
             let savedFeatures: any[] = [];
@@ -332,6 +509,9 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                         can_invite: true // Creator can invite others
                     });
                     console.log(`✅ Created share #1 for group creator ${currentUserId} with ${validSharePercent}%`);
+
+                    // Check and update group status if expected members reached (e.g., if group is created with only 1 member)
+                    await checkAndUpdateGroupStatus(group.id);
                 } catch (shareError: any) {
                     console.error('Error creating creator share:', shareError);
                     // Don't fail group creation if share creation fails
@@ -1182,6 +1362,9 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
 
             console.log(`✅ Cloned share ${shareId} to share #${targetShareNo} for user ${originalShare.user_id || originalShare.phone}`);
 
+            // Check and update group status if expected members reached
+            await checkAndUpdateGroupStatus(id);
+
             return res.json({
                 message: 'Share cloned successfully',
                 share: {
@@ -1299,6 +1482,9 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
             // Accept the invite
             pendingShare.status = 'accepted';
             await pendingShare.save();
+
+            // Check and update group status if expected members reached
+            await checkAndUpdateGroupStatus(id);
 
             // Generate JWT token for immediate login
             const jwt = require('jsonwebtoken');
@@ -1756,6 +1942,9 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
             share.invite_otp_expires_at = null;
             await share.save();
 
+            // Check and update group status if expected members reached
+            await checkAndUpdateGroupStatus(id);
+
             return res.json({
                 message: 'Invite accepted successfully',
                 share: share.toJSON(),
@@ -1855,6 +2044,405 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
             console.error('Error deleting group:', error);
             return res.status(400).json({
                 message: error.message || 'Failed to delete group'
+            });
+        }
+    });
+
+    // Update group auction date and timings (only for creator)
+    app.put('/groups/:id/auction', authenticateToken, async (req: AuthRequest, res) => {
+        try {
+            const { id } = req.params;
+            const { first_auction_date, auction_start_at, auction_end_at } = req.body;
+            const currentUserId = req.user?.id;
+
+            if (!currentUserId || !req.user) {
+                return res.status(401).json({ message: 'Authentication required' });
+            }
+
+            const group = await Group.findByPk(id);
+            if (!group) {
+                return res.status(404).json({ message: 'Group not found' });
+            }
+
+            // Only allow update if user is the creator
+            if (group.created_by !== currentUserId) {
+                return res.status(403).json({ message: 'Only the group creator can update auction details' });
+            }
+
+            const updateData: any = {};
+
+            // Update first_auction_date if provided
+            if (first_auction_date !== undefined) {
+                if (first_auction_date === null || first_auction_date === '') {
+                    updateData.first_auction_date = null;
+                } else {
+                    const firstDate = new Date(first_auction_date);
+                    if (!isNaN(firstDate.getTime())) {
+                        updateData.first_auction_date = firstDate;
+                    } else {
+                        return res.status(400).json({ message: 'Invalid first_auction_date format' });
+                    }
+                }
+            }
+
+            // Update auction_start_at if provided
+            if (auction_start_at !== undefined) {
+                if (auction_start_at === null || auction_start_at === '') {
+                    updateData.auction_start_at = null;
+                } else {
+                    const startDate = new Date(auction_start_at);
+                    if (!isNaN(startDate.getTime())) {
+                        updateData.auction_start_at = startDate;
+                    } else {
+                        return res.status(400).json({ message: 'Invalid auction_start_at format' });
+                    }
+                }
+            }
+
+            // Update auction_end_at if provided
+            if (auction_end_at !== undefined) {
+                if (auction_end_at === null || auction_end_at === '') {
+                    updateData.auction_end_at = null;
+                } else {
+                    const endDate = new Date(auction_end_at);
+                    if (!isNaN(endDate.getTime())) {
+                        updateData.auction_end_at = endDate;
+                    } else {
+                        return res.status(400).json({ message: 'Invalid auction_end_at format' });
+                    }
+                }
+            }
+
+            // Validate that end time is after start time if both are provided
+            if (updateData.auction_start_at && updateData.auction_end_at) {
+                const start = new Date(updateData.auction_start_at);
+                const end = new Date(updateData.auction_end_at);
+                if (end <= start) {
+                    return res.status(400).json({ message: 'Auction end time must be after start time' });
+                }
+            }
+
+            // Update the group
+            await group.update({
+                ...updateData,
+                updated_by: currentUserId
+            });
+
+            console.log(`✅ Updated auction details for group ${id} by user ${currentUserId}`);
+
+            // Return updated group data
+            const updatedGroup = await Group.findByPk(id);
+            return res.json({
+                message: 'Auction details updated successfully',
+                group: updatedGroup
+            });
+        } catch (error: any) {
+            console.error('Error updating auction details:', error);
+            return res.status(400).json({
+                message: error.message || 'Failed to update auction details'
+            });
+        }
+    });
+
+    // Place a bid on an open auction
+    app.post('/groups/:id/auction/bid', authenticateToken, async (req: AuthRequest, res) => {
+        try {
+            const { id: groupId } = req.params;
+            const { amount, group_usershare_id } = req.body;
+            const currentUserId = req.user?.id;
+
+            if (!currentUserId || !req.user) {
+                return res.status(401).json({ message: 'Authentication required' });
+            }
+
+            if (!amount || !group_usershare_id) {
+                return res.status(400).json({ message: 'amount and group_usershare_id are required' });
+            }
+
+            // Get group and verify it exists
+            const group = await Group.findByPk(groupId);
+            if (!group) {
+                return res.status(404).json({ message: 'Group not found' });
+            }
+
+            // Verify the share belongs to the user
+            const share = await GroupUserShare.findOne({
+                where: {
+                    id: group_usershare_id,
+                    group_id: groupId,
+                    user_id: currentUserId,
+                    status: { [Op.in]: ['accepted', 'active'] }
+                }
+            });
+
+            if (!share) {
+                return res.status(403).json({ message: 'Invalid share or you do not own this share' });
+            }
+
+            // Find open auction account
+            const { GroupAccount } = require('../models/GroupAccount');
+            const { Auction } = require('../models/Auction');
+
+            const groupAccount = await GroupAccount.findOne({
+                where: {
+                    group_id: groupId,
+                    status: 'open'
+                }
+            });
+
+            if (!groupAccount) {
+                return res.status(400).json({ message: 'No open auction found for this group' });
+            }
+
+            // Calculate minimum bid (group amount + commission)
+            const minimumBid = Number(group.amount) + Number(groupAccount.commission);
+            const bidAmount = parseFloat(amount);
+
+            if (bidAmount <= minimumBid) {
+                return res.status(400).json({
+                    message: `Bid must be above minimum bid of ₹${minimumBid.toFixed(2)} (Group amount + Commission)`
+                });
+            }
+
+            // Check if auction is still open (not past end time)
+            if (group.auction_end_at && new Date(group.auction_end_at) <= new Date()) {
+                return res.status(400).json({ message: 'Auction has ended' });
+            }
+
+            // Get current winning bid
+            const currentWinningBid = await Auction.findOne({
+                where: {
+                    group_account_id: groupAccount.id,
+                    is_winning_bid: true
+                },
+                order: [['amount', 'DESC']]
+            });
+
+            // If there's a winning bid, new bid must be higher
+            if (currentWinningBid && bidAmount <= Number(currentWinningBid.amount)) {
+                return res.status(400).json({
+                    message: `Bid must be higher than current winning bid of ₹${Number(currentWinningBid.amount).toFixed(2)}`
+                });
+            }
+
+            // Mark previous winning bid as false
+            if (currentWinningBid) {
+                await currentWinningBid.update({ is_winning_bid: false });
+            }
+
+            // Create new bid
+            const newBid = await Auction.create({
+                group_account_id: groupAccount.id,
+                group_id: groupId,
+                group_usershare_id: group_usershare_id,
+                user_id: currentUserId,
+                amount: bidAmount,
+                is_winning_bid: true,
+                created_by: currentUserId
+            });
+
+            // Update GroupAccount with new auction amount
+            await groupAccount.update({
+                auction_amount: bidAmount
+            });
+
+            console.log(`✅ New bid placed: ₹${bidAmount} by user ${currentUserId} for group ${groupId}`);
+
+            // Broadcast real-time update via WebSocket
+            const bidData = {
+                group_id: groupId,
+                group_account_id: groupAccount.id,
+                bid_id: newBid.id,
+                group_usershare_id: group_usershare_id,
+                user_id: currentUserId,
+                user_name: req.user.name,
+                amount: bidAmount,
+                current_winning_bid: true,
+                timestamp: new Date().toISOString()
+            };
+
+            // Emit to group room and globally
+            io.to(`group:${groupId}`).emit('auction:bid', bidData);
+            io.emit('auction:bid', bidData);
+
+            return res.json({
+                message: 'Bid placed successfully',
+                bid: {
+                    id: newBid.id,
+                    amount: bidAmount,
+                    is_winning_bid: true
+                }
+            });
+        } catch (error: any) {
+            console.error('Error placing bid:', error);
+            return res.status(400).json({
+                message: error.message || 'Failed to place bid'
+            });
+        }
+    });
+
+    // Manual trigger to check and update group status (for debugging/admin)
+    app.post('/groups/:id/check-status', authenticateToken, async (req: AuthRequest, res) => {
+        try {
+            const { id } = req.params;
+
+            // Get detailed status info
+            const group = await Group.findByPk(id);
+            if (!group) {
+                return res.status(404).json({ error: 'Group not found' });
+            }
+
+            const allShares = await GroupUserShare.findAll({
+                where: { group_id: id },
+                attributes: ['id', 'share_no', 'status', 'share_percent', 'user_id']
+            });
+
+            const acceptedShares = allShares.filter(s => s.status === 'accepted' || s.status === 'active');
+            const allocatedShareNumbers = new Set(acceptedShares.map(s => s.share_no).filter((n): n is number => n !== null && n !== undefined));
+
+            const missingShares: number[] = [];
+            for (let i = 1; i <= (group.number_of_members || 0); i++) {
+                if (!allocatedShareNumbers.has(i)) {
+                    missingShares.push(i);
+                }
+            }
+
+            // Now check and update
+            await checkAndUpdateGroupStatus(id);
+
+            // Reload group to get updated status
+            const updatedGroup = await Group.findByPk(id);
+
+            if (!updatedGroup) {
+                return res.status(404).json({ message: 'Group not found' });
+            }
+
+            return res.json({
+                message: 'Status check completed',
+                group: {
+                    id: updatedGroup.id,
+                    name: updatedGroup.name,
+                    status: updatedGroup.status,
+                    number_of_members: updatedGroup.number_of_members
+                },
+                shares: {
+                    total: allShares.length,
+                    accepted: acceptedShares.length,
+                    allocated_slots: allocatedShareNumbers.size,
+                    expected_slots: group.number_of_members || 0,
+                    allocated_share_numbers: Array.from(allocatedShareNumbers).sort((a, b) => a - b),
+                    missing_share_numbers: missingShares
+                },
+                will_move_to_inprogress: missingShares.length === 0 && updatedGroup.status === 'new'
+            });
+        } catch (error: any) {
+            console.error('Error checking group status:', error);
+            return res.status(400).json({
+                message: error.message || 'Failed to check group status'
+            });
+        }
+    });
+
+    // Get current auction status for a group
+    app.get('/groups/:id/auction', async (req, res) => {
+        try {
+            const { id: groupId } = req.params;
+
+            const { GroupAccount } = require('../models/GroupAccount');
+            const { Auction } = require('../models/Auction');
+            const { GroupUserShare } = require('../models/GroupUserShare');
+            const { User } = require('../models/User');
+
+            // Find open or closed auction account
+            const groupAccount = await GroupAccount.findOne({
+                where: {
+                    group_id: groupId,
+                    status: { [Op.in]: ['open', 'closed'] }
+                },
+                order: [['created_at', 'DESC']]
+            });
+
+            if (!groupAccount) {
+                return res.json({
+                    status: 'no_auction',
+                    message: 'No auction found for this group'
+                });
+            }
+
+            // Get winning bid
+            const winningBid = await Auction.findOne({
+                where: {
+                    group_account_id: groupAccount.id,
+                    is_winning_bid: true
+                },
+                include: [
+                    {
+                        model: User,
+                        as: 'user',
+                        attributes: ['id', 'name', 'phone']
+                    },
+                    {
+                        model: GroupUserShare,
+                        as: 'share',
+                        attributes: ['id', 'share_no', 'share_percent']
+                    }
+                ],
+                order: [['amount', 'DESC']]
+            });
+
+            // Get all bids for this auction
+            const allBids = await Auction.findAll({
+                where: {
+                    group_account_id: groupAccount.id
+                },
+                include: [
+                    {
+                        model: User,
+                        as: 'user',
+                        attributes: ['id', 'name', 'phone']
+                    },
+                    {
+                        model: GroupUserShare,
+                        as: 'share',
+                        attributes: ['id', 'share_no', 'share_percent']
+                    }
+                ],
+                order: [['amount', 'DESC'], ['created_at', 'DESC']]
+            });
+
+            // Get group details
+            const group = await Group.findByPk(groupId);
+            const minimumBid = group ? Number(group.amount) + Number(groupAccount.commission) : 0;
+
+            return res.json({
+                status: groupAccount.status,
+                group_account_id: groupAccount.id,
+                minimum_bid: minimumBid,
+                commission: groupAccount.commission,
+                current_winning_bid: winningBid ? {
+                    id: winningBid.id,
+                    amount: Number(winningBid.amount),
+                    user: winningBid.user,
+                    share: winningBid.share,
+                    created_at: winningBid.created_at
+                } : null,
+                all_bids: allBids.map((bid: any) => ({
+                    id: bid.id,
+                    amount: Number(bid.amount),
+                    user: bid.user,
+                    share: bid.share,
+                    is_winning_bid: bid.is_winning_bid,
+                    created_at: bid.created_at
+                })),
+                auction_amount: Number(groupAccount.auction_amount),
+                winner_share_id: groupAccount.winner_share_id,
+                created_at: groupAccount.created_at,
+                updated_at: groupAccount.updated_at
+            });
+        } catch (error: any) {
+            console.error('Error fetching auction status:', error);
+            return res.status(400).json({
+                message: error.message || 'Failed to fetch auction status'
             });
         }
     });

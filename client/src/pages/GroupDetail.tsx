@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
 import LoadingBar from '../components/LoadingBar'
+import Auction from '../components/Auction'
 
 // Helper function to decode JWT token and get user ID
 function getUserIdFromToken(token: string | null): string | null {
@@ -95,6 +96,9 @@ export default function GroupDetail() {
     const [inviting, setInviting] = useState(false)
     const [showNewShare, setShowNewShare] = useState(false)
     const [deleting, setDeleting] = useState(false)
+    const [showEditAuction, setShowEditAuction] = useState(false)
+    const [editingAuction, setEditingAuction] = useState(false)
+    const [editAuctionError, setEditAuctionError] = useState<string | null>(null)
 
     useEffect(() => {
         if (id) {
@@ -131,6 +135,96 @@ export default function GroupDetail() {
             setError('Failed to load group details')
         } finally {
             setLoading(false)
+        }
+    }
+
+    async function handleUpdateAuction(e: React.FormEvent<HTMLFormElement>) {
+        e.preventDefault()
+        if (!groupDetail || !state.token) return
+
+        setEditingAuction(true)
+        setEditAuctionError(null)
+
+        const formData = new FormData(e.currentTarget)
+        const firstAuctionDate = formData.get('first_auction_date') as string
+        const auctionStartDate = formData.get('auction_start_date') as string
+        const auctionStartTime = formData.get('auction_start_time') as string
+        const auctionEndDate = formData.get('auction_end_date') as string
+        const auctionEndTime = formData.get('auction_end_time') as string
+
+        try {
+            const updatePayload: any = {}
+            
+            if (firstAuctionDate) {
+                updatePayload.first_auction_date = new Date(firstAuctionDate).toISOString()
+            }
+            
+            // Handle auction start date and time
+            if (auctionStartDate || auctionStartTime) {
+                // Use provided date, or fallback to existing start date, or first_auction_date
+                const dateToUse = auctionStartDate || 
+                    (groupDetail.group.auction_start_at ? new Date(groupDetail.group.auction_start_at).toISOString().split('T')[0] : null) ||
+                    (firstAuctionDate || (groupDetail.group.first_auction_date ? new Date(groupDetail.group.first_auction_date).toISOString().split('T')[0] : null))
+                
+                // Use provided time, or fallback to existing start time, or default to 00:00
+                const timeToUse = auctionStartTime || 
+                    (groupDetail.group.auction_start_at ? new Date(groupDetail.group.auction_start_at).toTimeString().slice(0, 5) : '00:00')
+                
+                if (dateToUse) {
+                    const startDateTime = new Date(`${dateToUse}T${timeToUse}`)
+                    updatePayload.auction_start_at = startDateTime.toISOString()
+                }
+            }
+            
+            // Handle auction end date and time
+            if (auctionEndDate || auctionEndTime) {
+                // Use provided date, or fallback to existing end date, or start date, or first_auction_date
+                const dateToUse = auctionEndDate || 
+                    (groupDetail.group.auction_end_at ? new Date(groupDetail.group.auction_end_at).toISOString().split('T')[0] : null) ||
+                    (updatePayload.auction_start_at ? new Date(updatePayload.auction_start_at).toISOString().split('T')[0] : null) ||
+                    (groupDetail.group.auction_start_at ? new Date(groupDetail.group.auction_start_at).toISOString().split('T')[0] : null) ||
+                    (firstAuctionDate || (groupDetail.group.first_auction_date ? new Date(groupDetail.group.first_auction_date).toISOString().split('T')[0] : null))
+                
+                // Use provided time, or fallback to existing end time, or default to 23:59
+                const timeToUse = auctionEndTime || 
+                    (groupDetail.group.auction_end_at ? new Date(groupDetail.group.auction_end_at).toTimeString().slice(0, 5) : '23:59')
+                
+                if (dateToUse) {
+                    const endDateTime = new Date(`${dateToUse}T${timeToUse}`)
+                    updatePayload.auction_end_at = endDateTime.toISOString()
+                }
+            }
+
+            const response = await fetch(`/groups/${id}/auction`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${state.token}`
+                },
+                body: JSON.stringify(updatePayload)
+            })
+
+            if (response.ok) {
+                const data = await response.json()
+                // Update local state with new group data
+                setGroupDetail({
+                    ...groupDetail,
+                    group: {
+                        ...groupDetail.group,
+                        ...data.group
+                    }
+                })
+                setShowEditAuction(false)
+                alert('Auction details updated successfully!')
+            } else {
+                const errorData = await response.json().catch(() => ({ message: 'Failed to update auction details' }))
+                setEditAuctionError(errorData.message || 'Failed to update auction details')
+            }
+        } catch (err) {
+            console.error('Error updating auction details:', err)
+            setEditAuctionError('Failed to update auction details')
+        } finally {
+            setEditingAuction(false)
         }
     }
 
@@ -549,11 +643,63 @@ export default function GroupDetail() {
                             </div>
                         )}
                         {group.first_auction_date && (
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.875rem' }}>
                                 <span style={{ color: '#64748b' }}>First Auction:</span>
-                                <span style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.8rem' }}>
-                                    {new Date(group.first_auction_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.8rem' }}>
+                                        {new Date(group.first_auction_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                    </span>
+                                    {group.created_by === getUserIdFromToken(state.token) && (
+                                        <button
+                                            onClick={() => setShowEditAuction(true)}
+                                            style={{
+                                                padding: '4px 8px',
+                                                fontSize: '0.75rem',
+                                                background: '#eff6ff',
+                                                color: '#2563eb',
+                                                border: '1px solid #bfdbfe',
+                                                borderRadius: 4,
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: 4
+                                            }}
+                                            title="Edit auction date and timings"
+                                        >
+                                            ✏️ Edit
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        {(group.auction_start_at || group.auction_end_at) && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.875rem', marginTop: 4 }}>
+                                {group.auction_start_at && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <span style={{ color: '#64748b' }}>Start Time:</span>
+                                        <span style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.8rem' }}>
+                                            {new Date(group.auction_start_at).toLocaleString('en-US', { 
+                                                month: 'short', 
+                                                day: 'numeric', 
+                                                hour: '2-digit', 
+                                                minute: '2-digit' 
+                                            })}
+                                        </span>
+                                    </div>
+                                )}
+                                {group.auction_end_at && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <span style={{ color: '#64748b' }}>End Time:</span>
+                                        <span style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.8rem' }}>
+                                            {new Date(group.auction_end_at).toLocaleString('en-US', { 
+                                                month: 'short', 
+                                                day: 'numeric', 
+                                                hour: '2-digit', 
+                                                minute: '2-digit' 
+                                            })}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
@@ -603,6 +749,20 @@ export default function GroupDetail() {
                     </div>
                 </div>
             </div>
+
+            {/* Auction Component */}
+            {groupDetail && (
+                <Auction
+                    groupId={group.id}
+                    userShares={groupDetail.shares.map(share => ({
+                        id: share.id,
+                        share_no: share.share_no,
+                        share_percent: share.share_percent,
+                        status: share.status,
+                        user_id: share.user?.id || null
+                    }))}
+                />
+            )}
 
             {/* For New Groups - Add New Users - PRIMARY FOCUS */}
             {group.status === 'new' && (
@@ -1524,6 +1684,194 @@ export default function GroupDetail() {
                             </div>
                         </div>
                     )}
+                </>
+            )}
+
+            {/* Edit Auction Modal */}
+            {showEditAuction && groupDetail && (
+                <>
+                    <div
+                        style={{
+                            position: 'fixed',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                            zIndex: 1000,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                        }}
+                        onClick={() => {
+                            if (!editingAuction) {
+                                setShowEditAuction(false)
+                                setEditAuctionError(null)
+                            }
+                        }}
+                    >
+                        <div
+                            style={{
+                                background: '#fff',
+                                borderRadius: 12,
+                                padding: 24,
+                                maxWidth: 500,
+                                width: '90%',
+                                maxHeight: '90vh',
+                                overflow: 'auto',
+                                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <h2 style={{ margin: '0 0 20px 0', fontSize: '1.5rem', fontWeight: 700, color: '#1e293b' }}>
+                                Edit Auction Date & Timings
+                            </h2>
+
+                            {editAuctionError && (
+                                <div style={{
+                                    padding: 12,
+                                    background: '#fee2e2',
+                                    color: '#dc2626',
+                                    borderRadius: 8,
+                                    marginBottom: 16,
+                                    fontSize: '0.875rem'
+                                }}>
+                                    {editAuctionError}
+                                </div>
+                            )}
+
+                            <form onSubmit={handleUpdateAuction}>
+                                <div style={{ marginBottom: 16 }}>
+                                    <label style={{ display: 'block', marginBottom: 6, fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
+                                        First Auction Date
+                                    </label>
+                                    <input
+                                        type="date"
+                                        name="first_auction_date"
+                                        defaultValue={groupDetail.group.first_auction_date ? new Date(groupDetail.group.first_auction_date).toISOString().split('T')[0] : ''}
+                                        required
+                                        style={{
+                                            width: '100%',
+                                            padding: '10px 12px',
+                                            border: '1px solid #e2e8f0',
+                                            borderRadius: 8,
+                                            fontSize: '0.875rem'
+                                        }}
+                                    />
+                                </div>
+
+                                <div style={{ marginBottom: 16 }}>
+                                    <label style={{ display: 'block', marginBottom: 6, fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
+                                        Auction Start Date & Time
+                                    </label>
+                                    <div style={{ display: 'flex', gap: 8 }}>
+                                        <input
+                                            type="date"
+                                            name="auction_start_date"
+                                            defaultValue={groupDetail.group.auction_start_at ? new Date(groupDetail.group.auction_start_at).toISOString().split('T')[0] : ''}
+                                            style={{
+                                                flex: 1,
+                                                padding: '10px 12px',
+                                                border: '1px solid #e2e8f0',
+                                                borderRadius: 8,
+                                                fontSize: '0.875rem'
+                                            }}
+                                        />
+                                        <input
+                                            type="time"
+                                            name="auction_start_time"
+                                            defaultValue={groupDetail.group.auction_start_at ? new Date(groupDetail.group.auction_start_at).toTimeString().slice(0, 5) : ''}
+                                            style={{
+                                                flex: 1,
+                                                padding: '10px 12px',
+                                                border: '1px solid #e2e8f0',
+                                                borderRadius: 8,
+                                                fontSize: '0.875rem'
+                                            }}
+                                        />
+                                    </div>
+                                    <p style={{ margin: '4px 0 0', fontSize: '0.75rem', color: '#64748b' }}>
+                                        Date and time when the auction starts
+                                    </p>
+                                </div>
+
+                                <div style={{ marginBottom: 20 }}>
+                                    <label style={{ display: 'block', marginBottom: 6, fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
+                                        Auction End Date & Time
+                                    </label>
+                                    <div style={{ display: 'flex', gap: 8 }}>
+                                        <input
+                                            type="date"
+                                            name="auction_end_date"
+                                            defaultValue={groupDetail.group.auction_end_at ? new Date(groupDetail.group.auction_end_at).toISOString().split('T')[0] : ''}
+                                            style={{
+                                                flex: 1,
+                                                padding: '10px 12px',
+                                                border: '1px solid #e2e8f0',
+                                                borderRadius: 8,
+                                                fontSize: '0.875rem'
+                                            }}
+                                        />
+                                        <input
+                                            type="time"
+                                            name="auction_end_time"
+                                            defaultValue={groupDetail.group.auction_end_at ? new Date(groupDetail.group.auction_end_at).toTimeString().slice(0, 5) : ''}
+                                            style={{
+                                                flex: 1,
+                                                padding: '10px 12px',
+                                                border: '1px solid #e2e8f0',
+                                                borderRadius: 8,
+                                                fontSize: '0.875rem'
+                                            }}
+                                        />
+                                    </div>
+                                    <p style={{ margin: '4px 0 0', fontSize: '0.75rem', color: '#64748b' }}>
+                                        Date and time when the auction ends (must be after start date/time)
+                                    </p>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: 12 }}>
+                                    <button
+                                        type="submit"
+                                        disabled={editingAuction}
+                                        style={{
+                                            flex: 1,
+                                            padding: '12px 24px',
+                                            background: editingAuction ? '#94a3b8' : '#2563eb',
+                                            color: '#fff',
+                                            border: 'none',
+                                            borderRadius: 8,
+                                            cursor: editingAuction ? 'not-allowed' : 'pointer',
+                                            fontSize: '1rem',
+                                            fontWeight: 600
+                                        }}
+                                    >
+                                        {editingAuction ? 'Updating...' : 'Update Auction'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setShowEditAuction(false)
+                                            setEditAuctionError(null)
+                                        }}
+                                        disabled={editingAuction}
+                                        style={{
+                                            padding: '12px 24px',
+                                            background: '#f1f5f9',
+                                            color: '#1e293b',
+                                            border: '1px solid #e2e8f0',
+                                            borderRadius: 8,
+                                            cursor: editingAuction ? 'not-allowed' : 'pointer',
+                                            fontSize: '1rem',
+                                            fontWeight: 600
+                                        }}
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
                 </>
             )}
         </div>

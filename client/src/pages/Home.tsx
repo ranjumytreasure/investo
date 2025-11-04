@@ -3,6 +3,8 @@ import { useAuth } from '../state/AuthContext'
 import { useLanguage } from '../state/LanguageContext'
 import { useState, useEffect, useCallback } from 'react'
 import LoadingBar from '../components/LoadingBar'
+import AuctionParticipationModal from '../components/AuctionParticipationModal'
+import { useSocket } from '../hooks/useSocket'
 
 interface Group {
     id: string
@@ -16,6 +18,21 @@ interface Group {
     created_at: string
     added_members?: number
     pending_members?: number
+    auction_start_at?: string | null
+    auction_end_at?: string | null
+    auction_status?: 'open' | 'closed' | 'no_auction' // Auction status from group_accounts
+}
+
+interface LiveAuction {
+    group_id: string
+    group_name: string
+    group_account_id: string
+    minimum_bid: number
+    commission: number
+    group_amount: number
+    opened_at: string
+    auction_start_at: string
+    auction_end_at: string
 }
 
 // Helper function to decode JWT token and get user ID
@@ -52,6 +69,7 @@ export default function Home() {
         phone: state.phone
     })
     const [groupTab, setGroupTab] = useState<'all' | 'inprogress' | 'new' | 'closed'>('all')
+    const [groupView, setGroupView] = useState<'card' | 'list'>('card') // View mode: card or list
     const [groups, setGroups] = useState<Group[]>([])
     const [allGroups, setAllGroups] = useState<Group[]>([]) // Store all groups for counts
     const [loading, setLoading] = useState(true)
@@ -77,6 +95,15 @@ export default function Home() {
         kyc_verified: boolean
         addressCount: number
     } | null>(null)
+    const [liveAuctions, setLiveAuctions] = useState<LiveAuction[]>([])
+    const [participationModal, setParticipationModal] = useState<{
+        groupId: string
+        groupName: string
+        groupAmount: number
+        auctionStartAt: string
+        auctionEndAt: string
+    } | null>(null)
+    const socket = useSocket()
 
     // Fetch all groups for counts
     useEffect(() => {
@@ -114,6 +141,175 @@ export default function Home() {
             console.error('Error fetching profile data:', err)
         }
     }, [state.token])
+
+    // Fetch live auctions
+    async function fetchLiveAuctions() {
+        if (!isLoggedIn) return
+        
+        try {
+            const token = state.token || localStorage.getItem('token')
+            const headers: Record<string, string> = {}
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`
+            }
+
+            // Get all groups and check which ones have open auctions
+            const response = await fetch('/groups', { headers })
+            if (response.ok) {
+                const allGroups: Group[] = await response.json()
+                const liveAuctionsList: LiveAuction[] = []
+
+                // Check each group for open auction
+                for (const group of allGroups) {
+                    if (group.auction_start_at && group.auction_end_at) {
+                        const startTime = new Date(group.auction_start_at).getTime()
+                        const endTime = new Date(group.auction_end_at).getTime()
+                        const now = Date.now()
+
+                        // If auction is currently open (between start and end)
+                        if (now >= startTime && now <= endTime) {
+                            try {
+                                const auctionResponse = await fetch(`/groups/${group.id}/auction`, { headers })
+                                if (auctionResponse.ok) {
+                                    const auctionData = await auctionResponse.json()
+                                    if (auctionData.status === 'open') {
+                                        liveAuctionsList.push({
+                                            group_id: group.id,
+                                            group_name: group.name,
+                                            group_account_id: auctionData.group_account_id,
+                                            minimum_bid: auctionData.minimum_bid,
+                                            commission: auctionData.commission,
+                                            group_amount: group.amount,
+                                            opened_at: auctionData.created_at,
+                                            auction_start_at: group.auction_start_at,
+                                            auction_end_at: group.auction_end_at
+                                        })
+                                    }
+                                }
+                            } catch (err) {
+                                console.error(`Error fetching auction for group ${group.id}:`, err)
+                            }
+                        }
+                    }
+                }
+
+                setLiveAuctions(liveAuctionsList)
+            }
+        } catch (err) {
+            console.error('Error fetching live auctions:', err)
+        }
+    }
+
+    // Set up WebSocket listeners for auction events
+    useEffect(() => {
+        if (!socket) return
+
+        socket.on('auction:opened', async (data: LiveAuction) => {
+            console.log('🎯 Auction opened event received:', data)
+            
+            // Verify auction is actually open by checking the API
+            const token = state.token || localStorage.getItem('token')
+            if (!token) return
+            
+            try {
+                const auctionResponse = await fetch(`/groups/${data.group_id}/auction`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                })
+                
+                if (auctionResponse.ok) {
+                    const auctionData = await auctionResponse.json()
+                    
+                    // Only show modal if auction is actually open
+                    if (auctionData.status === 'open') {
+                        // Check if user is a member of this group
+                        const userGroups = allGroups.filter(g => 
+                            g.id === data.group_id && (
+                                g.created_by === currentUserId ||
+                                // Check if user has shares in this group
+                                true // We'll check this properly when we have share data
+                            )
+                        )
+
+                        if (userGroups.length > 0) {
+                            // Show participation modal
+                            setParticipationModal({
+                                groupId: data.group_id,
+                                groupName: data.group_name,
+                                groupAmount: data.group_amount,
+                                auctionStartAt: data.auction_start_at || auctionData.auction_start_at,
+                                auctionEndAt: data.auction_end_at || auctionData.auction_end_at
+                            })
+                        }
+                    } else {
+                        console.log('⚠️ Auction opened event received but auction status is not open:', auctionData.status)
+                    }
+                }
+            } catch (err) {
+                console.error('Error verifying auction status:', err)
+            }
+
+            // Refresh live auctions list
+            fetchLiveAuctions()
+        })
+
+        socket.on('auction:closed', (data: any) => {
+            console.log('🔒 Auction closed event received:', data)
+            
+            // Close modal if it's for this group
+            if (participationModal && participationModal.groupId === data.group_id) {
+                setParticipationModal(null)
+            }
+            
+            // Refresh live auctions list
+            fetchLiveAuctions()
+        })
+
+        return () => {
+            socket.off('auction:opened')
+            socket.off('auction:closed')
+        }
+    }, [socket, allGroups, currentUserId, state.token, participationModal])
+
+    // Fetch live auctions on mount and when groups change
+    useEffect(() => {
+        if (isLoggedIn && allGroups.length > 0) {
+            fetchLiveAuctions()
+        }
+    }, [isLoggedIn, allGroups])
+
+    // Periodic check to verify auction status and close modal if auction has closed
+    useEffect(() => {
+        if (!participationModal) return
+
+        const checkInterval = setInterval(async () => {
+            const token = state.token || localStorage.getItem('token')
+            if (!token) return
+
+            try {
+                const auctionResponse = await fetch(`/groups/${participationModal.groupId}/auction`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                })
+
+                if (auctionResponse.ok) {
+                    const auctionData = await auctionResponse.json()
+                    
+                    // Close modal if auction is no longer open
+                    if (auctionData.status !== 'open') {
+                        console.log('⚠️ Auction closed, closing modal')
+                        setParticipationModal(null)
+                    }
+                }
+            } catch (err) {
+                console.error('Error checking auction status:', err)
+            }
+        }, 30000) // Check every 30 seconds
+
+        return () => clearInterval(checkInterval)
+    }, [participationModal, state.token])
 
     // Fetch filtered groups based on tab
     useEffect(() => {
@@ -345,381 +541,842 @@ export default function Home() {
         <>
             {loading && <LoadingBar />}
             <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px' }}>
-            {isLoggedIn ? (() => {
-                const completionPercentage = calculateProfileCompletion()
-                const canStartGroup = completionPercentage === 100
-                
-                return (
-                    <section style={{ marginBottom: 24 }}>
-                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, background: '#ffffff' }}>
-                            <h2 style={{ marginTop: 0, marginBottom: 8 }}>Welcome{state.phone ? `, ${state.phone}` : ''} 👋</h2>
-                            <p style={{ color: '#555', marginTop: 0 }}>
-                                Profile completion: <strong>{completionPercentage}%</strong>. 
-                                {completionPercentage < 100 ? (
-                                    <> Update phone, address, and complete KYC to reach 100%. Only at 100% you can start a group.</>
-                                ) : (
-                                    <> Your profile is complete! You can now start a group.</>
-                                )}
-                            </p>
-                            <div style={{ height: 10, background: '#f1f5f9', borderRadius: 9999, overflow: 'hidden', marginTop: 8 }}>
-                                <div style={{ 
-                                    width: `${completionPercentage}%`, 
-                                    height: '100%', 
-                                    background: completionPercentage === 100 ? '#16a34a' : '#2563eb',
-                                    transition: 'width 0.3s ease'
-                                }} />
-                            </div>
-                            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
-                                <Link to="/profile" style={{ padding: '10px 14px', border: '1px solid #cbd5e1', borderRadius: 8 }}>Update Profile</Link>
-                                <Link to="/verify" style={{ padding: '10px 14px', background: '#16a34a', color: '#fff', borderRadius: 8, border: '1px solid #15803d' }}>Verify Account</Link>
-                                {canStartGroup ? (
-                                    <Link to="/groups/new" style={{ padding: '10px 14px', border: '1px solid #1e40af', background: '#2563eb', color: '#fff', borderRadius: 8 }}>Start a group</Link>
-                                ) : (
-                                    <button
-                                        disabled
-                                        style={{
-                                            padding: '10px 14px',
-                                            border: '1px solid #cbd5e1',
-                                            background: '#f1f5f9',
-                                            color: '#94a3b8',
-                                            borderRadius: 8,
-                                            cursor: 'not-allowed'
-                                        }}
-                                        title="Complete your profile to 100% to start a group"
-                                    >
-                                        Start a group
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                    </section>
-                )
-            })() : null}
-
-            <section style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, background: '#ffffff' }}>
-                <h3 style={{ marginTop: 0 }}>{t('myGroups')}</h3>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-                    <button
-                        onClick={() => setGroupTab('all')}
-                        style={{
-                            padding: '8px 12px',
-                            borderRadius: 9999,
-                            border: '1px solid #cbd5e1',
-                            background: groupTab === 'all' ? '#2563eb' : '#f8fafc',
-                            color: groupTab === 'all' ? '#fff' : '#0f172a',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        {t('allGroups')} ({counts.all})
-                    </button>
-                    <button
-                        onClick={() => setGroupTab('inprogress')}
-                        style={{
-                            padding: '8px 12px',
-                            borderRadius: 9999,
-                            border: '1px solid #cbd5e1',
-                            background: groupTab === 'inprogress' ? '#2563eb' : '#f8fafc',
-                            color: groupTab === 'inprogress' ? '#fff' : '#0f172a',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        {t('inProgressGroups')} ({counts.inprogress})
-                    </button>
-                    <button
-                        onClick={() => setGroupTab('new')}
-                        style={{
-                            padding: '8px 12px',
-                            borderRadius: 9999,
-                            border: '1px solid #cbd5e1',
-                            background: groupTab === 'new' ? '#2563eb' : '#f8fafc',
-                            color: groupTab === 'new' ? '#fff' : '#0f172a',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        {t('newGroups')} ({counts.new})
-                    </button>
-                    <button
-                        onClick={() => setGroupTab('closed')}
-                        style={{
-                            padding: '8px 12px',
-                            borderRadius: 9999,
-                            border: '1px solid #cbd5e1',
-                            background: groupTab === 'closed' ? '#2563eb' : '#f8fafc',
-                            color: groupTab === 'closed' ? '#fff' : '#0f172a',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        {t('closedGroups')} ({counts.closed})
-                    </button>
-                </div>
-
-                {loading ? (
-                    <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>{t('loadingGroups')}</div>
-                ) : error ? (
-                    <div style={{ textAlign: 'center', padding: '40px', color: '#dc2626' }}>{error}</div>
-                ) : groups.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>
-                        <p>{t('noGroupsFound')}</p>
-                        {isLoggedIn && (
-                            <Link
-                                to="/groups/new"
-                                style={{
-                                    display: 'inline-block',
-                                    marginTop: 12,
-                                    padding: '10px 16px',
-                                    background: '#2563eb',
-                                    color: '#fff',
-                                    borderRadius: 8,
-                                    textDecoration: 'none'
-                                }}
-                            >
-                                {t('createFirstGroup')}
-                            </Link>
-                        )}
-                    </div>
-                ) : (
-                    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
-                        {groups.map(group => {
-                            const createdDate = new Date(group.created_at)
-                            const formattedDate = createdDate.toLocaleDateString('en-US', {
-                                day: 'numeric',
-                                month: 'short',
-                                year: 'numeric'
-                            })
-                            const amount = parseFloat(group.amount.toString())
-                            const isCreatedByMe = currentUserId && group.created_by === currentUserId
-                            const isJoinedGroup = !isCreatedByMe // If not created by me, it's a joined group
-
-                            return (
-                                <Link
-                                    to={`/groups/${group.id}`}
-                                    key={group.id}
-                                    style={{
-                                        textDecoration: 'none',
-                                        color: 'inherit'
-                                    }}
-                                >
-                                    <div
-                                        style={{
-                                            border: '1px solid #e5e7eb',
-                                            borderRadius: 12,
-                                            padding: 16,
-                                            cursor: 'pointer',
-                                            transition: 'all 0.2s',
-                                            background: isJoinedGroup ? '#f8fafc' : '#ffffff'
-                                        }}
-                                        onMouseEnter={(e) => {
-                                            e.currentTarget.style.borderColor = '#2563eb'
-                                            e.currentTarget.style.boxShadow = '0 2px 8px rgba(37, 99, 235, 0.1)'
-                                        }}
-                                        onMouseLeave={(e) => {
-                                            e.currentTarget.style.borderColor = '#e5e7eb'
-                                            e.currentTarget.style.boxShadow = 'none'
-                                        }}
-                                    >
-                                        {/* Group name, Manage Features, and Delete button in one row */}
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
-                                            <div style={{ flex: 1, minWidth: 0 }}>
-                                                <strong style={{ fontSize: '1.125rem', color: '#1e293b' }}>{group.name}</strong>
-                                                {isCreatedByMe && (
-                                                    <div style={{
-                                                        display: 'inline-block',
-                                                        marginLeft: 8,
-                                                        padding: '2px 6px',
-                                                        borderRadius: 4,
-                                                        fontSize: '0.7rem',
-                                                        background: '#dbeafe',
-                                                        color: '#1e40af',
-                                                        fontWeight: 600
-                                                    }}>
-                                                        {t('createdByMe')}
-                                                    </div>
-                                                )}
-                                                {isJoinedGroup && (
-                                                    <div style={{
-                                                        display: 'inline-block',
-                                                        marginLeft: 8,
-                                                        padding: '2px 6px',
-                                                        borderRadius: 4,
-                                                        fontSize: '0.7rem',
-                                                        background: '#dcfce7',
-                                                        color: '#166534',
-                                                        fontWeight: 600
-                                                    }}>
-                                                        {t('joined')}
-                                                    </div>
-                                                )}
-                                            </div>
-                                            {isLoggedIn && (
-                                                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                                                    <Link
-                                                        to={`/groups/${group.id}/features`}
-                                                        style={{
-                                                            padding: '6px 12px',
-                                                            fontSize: '0.875rem',
-                                                            background: '#f1f5f9',
-                                                            color: '#1e293b',
-                                                            borderRadius: 6,
-                                                            textDecoration: 'none',
-                                                            border: '1px solid #e2e8f0',
-                                                            whiteSpace: 'nowrap'
-                                                        }}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                >
-                                                    {t('manageFeatures')}
-                                                </Link>
-                                                {/* Show delete button only if group is new and created by current user */}
-                                                {group.status === 'new' && isCreatedByMe && (
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.preventDefault()
-                                                            e.stopPropagation()
-                                                            handleDeleteGroup(group.id, group.name)
-                                                        }}
-                                                        disabled={deletingGroupId === group.id}
-                                                        style={{
-                                                            padding: '6px 12px',
-                                                            fontSize: '0.875rem',
-                                                            background: deletingGroupId === group.id ? '#94a3b8' : '#dc2626',
-                                                            color: '#fff',
-                                                            border: 'none',
-                                                            borderRadius: 6,
-                                                            cursor: deletingGroupId === group.id ? 'not-allowed' : 'pointer',
-                                                            fontWeight: 500,
-                                                            whiteSpace: 'nowrap'
-                                                        }}
-                                                    >
-                                                        {deletingGroupId === group.id ? 'Deleting...' : `🗑️ ${t('delete')}`}
-                                                    </button>
-                                                )}
-                                                </div>
-                                            )}
-                                        </div>
-                                        
-                                        {/* Status badge and created date */}
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                                            <p style={{ color: '#9ca3af', margin: 0, fontSize: '0.75rem' }}>
-                                                {t('created')}: {formattedDate}
+                {/* Combined Welcome + Live Auctions Section */}
+                {isLoggedIn ? (() => {
+                    const completionPercentage = calculateProfileCompletion()
+                    const canStartGroup = completionPercentage === 100
+                    
+                    return (
+                        <section style={{ marginBottom: 24 }}>
+                            <div style={{ 
+                                border: '1px solid #e5e7eb',
+                                borderRadius: 16,
+                                padding: 24,
+                                background: '#ffffff',
+                                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.05)'
+                            }}>
+                                {/* Welcome Section */}
+                                <div style={{ minWidth: 0 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                                        <div style={{ fontSize: '2rem' }}>👋</div>
+                                        <div style={{ flex: 1 }}>
+                                            <h2 style={{ margin: 0, marginBottom: 4, fontSize: '1.5rem', fontWeight: 700, color: '#1e293b' }}>
+                                                Welcome{state.phone ? `, ${state.phone}` : ''}
+                                            </h2>
+                                            <p style={{ margin: 0, color: '#64748b', fontSize: '0.875rem' }}>
+                                                Profile completion: <strong style={{ color: '#1e293b' }}>{completionPercentage}%</strong>
                                             </p>
-                                            <span style={{
-                                                padding: '4px 8px',
-                                                borderRadius: 6,
-                                                fontSize: '0.75rem',
-                                                fontWeight: 500,
-                                                background: group.status === 'new' ? '#eff6ff' :
-                                                    group.status === 'inprogress' ? '#fef3c7' : '#f3f4f6',
-                                                color: group.status === 'new' ? '#2563eb' :
-                                                    group.status === 'inprogress' ? '#d97706' : '#6b7280'
-                                            }}>
-                                                {group.status === 'new' ? t('new') :
-                                                    group.status === 'inprogress' ? t('inProgress') : t('closed')}
-                                            </span>
-                                        </div>
-                                        
-                                        {/* Amount, Members, First Auction, and Add Members Button in row layout */}
-                                        <div style={{ 
-                                            display: 'grid', 
-                                            gridTemplateColumns: group.pending_members && group.pending_members > 0 
-                                                ? 'repeat(auto-fit, minmax(100px, 1fr))' 
-                                                : 'repeat(auto-fit, minmax(100px, 1fr))', 
-                                            gap: 12,
-                                            marginTop: 8,
-                                            padding: '12px',
-                                            background: '#f8fafc',
-                                            borderRadius: 8,
-                                            border: '1px solid #e2e8f0'
-                                        }}>
-                                            <div>
-                                                <div style={{ color: '#64748b', fontSize: '0.75rem', marginBottom: 4 }}>{t('amount')}</div>
-                                                <div style={{ color: '#1e293b', fontSize: '0.875rem', fontWeight: 600 }}>
-                                                    ₹{amount.toLocaleString()}
-                                                </div>
-                                            </div>
-                                            {group.number_of_members && (
-                                                <div>
-                                                    <div style={{ color: '#64748b', fontSize: '0.75rem', marginBottom: 4 }}>{t('members')}</div>
-                                                    <div style={{ color: '#1e293b', fontSize: '0.875rem', fontWeight: 600 }}>
-                                                        {group.number_of_members}
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {group.first_auction_date && (
-                                                <div>
-                                                    <div style={{ color: '#64748b', fontSize: '0.75rem', marginBottom: 4 }}>{t('firstAuction')}</div>
-                                                    <div style={{ color: '#1e293b', fontSize: '0.875rem', fontWeight: 600 }}>
-                                                        {new Date(group.first_auction_date).toLocaleDateString()}
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {/* Add Pending Members Button */}
-                                            {group.pending_members && group.pending_members > 0 && (
-                                                <div style={{ gridColumn: group.first_auction_date ? 'span 1' : 'span 1' }}>
-                                                    <Link
-                                                        to={`/groups/${group.id}`}
-                                                        className="pending-members-button"
-                                                        style={{
-                                                            display: 'block',
-                                                            padding: '10px 12px',
-                                                            fontSize: '0.75rem',
-                                                            background: '#10b981',
-                                                            color: '#fff',
-                                                            borderRadius: 8,
-                                                            textDecoration: 'none',
-                                                            textAlign: 'center',
-                                                            fontWeight: 600,
-                                                            border: '1px solid #059669',
-                                                            transition: 'all 0.2s',
-                                                            whiteSpace: 'nowrap'
-                                                        }}
-                                                        onClick={(e) => e.stopPropagation()}
-                                                        onMouseEnter={(e) => {
-                                                            e.currentTarget.style.background = '#059669'
-                                                            e.currentTarget.style.animation = 'none'
-                                                        }}
-                                                        onMouseLeave={(e) => {
-                                                            e.currentTarget.style.background = '#10b981'
-                                                            e.currentTarget.style.animation = 'pulse-glow-bounce 2.5s ease-in-out infinite'
-                                                        }}
-                                                    >
-                                                        {t('addMember')} {group.pending_members} {t('member')}
-                                                    </Link>
-                                                </div>
-                                            )}
                                         </div>
                                     </div>
-                                </Link>
-                            )
-                        })}
+                                    <div style={{ height: 8, background: '#f1f5f9', borderRadius: 9999, overflow: 'hidden', marginBottom: 16 }}>
+                                        <div style={{ 
+                                            width: `${completionPercentage}%`, 
+                                            height: '100%', 
+                                            background: completionPercentage === 100 ? '#16a34a' : '#2563eb',
+                                            transition: 'width 0.3s ease',
+                                            borderRadius: 9999
+                                        }} />
+                                    </div>
+                                    <p style={{ margin: '0 0 16px 0', color: '#475569', fontSize: '0.875rem', lineHeight: 1.6 }}>
+                                        {completionPercentage < 100 ? (
+                                            <>Update phone, address, and complete KYC to reach 100%. Only at 100% you can start a group.</>
+                                        ) : (
+                                            <>Your profile is complete! You can now start a group.</>
+                                        )}
+                                    </p>
+                                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                        <Link 
+                                            to="/profile" 
+                                            style={{ 
+                                                padding: '8px 16px', 
+                                                border: '1px solid #cbd5e1', 
+                                                borderRadius: 8,
+                                                fontSize: '0.875rem',
+                                                textDecoration: 'none',
+                                                color: '#475569',
+                                                fontWeight: 500,
+                                                transition: 'all 0.2s'
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                e.currentTarget.style.background = '#f8fafc'
+                                                e.currentTarget.style.borderColor = '#94a3b8'
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                e.currentTarget.style.background = 'transparent'
+                                                e.currentTarget.style.borderColor = '#cbd5e1'
+                                            }}
+                                        >
+                                            Update Profile
+                                        </Link>
+                                        <Link 
+                                            to="/verify" 
+                                            style={{ 
+                                                padding: '8px 16px', 
+                                                background: '#16a34a', 
+                                                color: '#fff', 
+                                                borderRadius: 8, 
+                                                border: '1px solid #15803d',
+                                                fontSize: '0.875rem',
+                                                textDecoration: 'none',
+                                                fontWeight: 500,
+                                                transition: 'all 0.2s'
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                e.currentTarget.style.background = '#15803d'
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                e.currentTarget.style.background = '#16a34a'
+                                            }}
+                                        >
+                                            Verify Account
+                                        </Link>
+                                        {canStartGroup ? (
+                                            <Link 
+                                                to="/groups/new" 
+                                                style={{ 
+                                                    padding: '8px 16px', 
+                                                    border: '1px solid #1e40af', 
+                                                    background: '#2563eb', 
+                                                    color: '#fff', 
+                                                    borderRadius: 8,
+                                                    fontSize: '0.875rem',
+                                                    textDecoration: 'none',
+                                                    fontWeight: 500,
+                                                    transition: 'all 0.2s'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.background = '#1e40af'
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.background = '#2563eb'
+                                                }}
+                                            >
+                                                Start a group
+                                            </Link>
+                                        ) : (
+                                            <button
+                                                disabled
+                                                style={{
+                                                    padding: '8px 16px',
+                                                    border: '1px solid #cbd5e1',
+                                                    background: '#f1f5f9',
+                                                    color: '#94a3b8',
+                                                    borderRadius: 8,
+                                                    cursor: 'not-allowed',
+                                                    fontSize: '0.875rem',
+                                                    fontWeight: 500
+                                                }}
+                                                title="Complete your profile to 100% to start a group"
+                                            >
+                                                Start a group
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    )
+                })() : null}
+
+                {/* Main Layout: Content Area */}
+                <div style={{ minWidth: 0 }}>
+
+                    {/* My Groups Section */}
+                    <section style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, background: '#ffffff' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+                            <h3 style={{ margin: 0 }}>{t('myGroups')}</h3>
+                            
+                            {/* View Toggle Buttons */}
+                            <div style={{ display: 'flex', gap: 4, alignItems: 'center', background: '#f1f5f9', padding: 4, borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                                <button
+                                    onClick={() => setGroupView('card')}
+                                    style={{
+                                        padding: '6px 12px',
+                                        borderRadius: 6,
+                                        border: 'none',
+                                        background: groupView === 'card' ? '#2563eb' : 'transparent',
+                                        color: groupView === 'card' ? '#fff' : '#64748b',
+                                        cursor: 'pointer',
+                                        fontSize: '0.875rem',
+                                        fontWeight: 600,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                        transition: 'all 0.2s'
+                                    }}
+                                    title="Card View"
+                                >
+                                    <span>⬜</span>
+                                    <span>Card</span>
+                                </button>
+                                <button
+                                    onClick={() => setGroupView('list')}
+                                    style={{
+                                        padding: '6px 12px',
+                                        borderRadius: 6,
+                                        border: 'none',
+                                        background: groupView === 'list' ? '#2563eb' : 'transparent',
+                                        color: groupView === 'list' ? '#fff' : '#64748b',
+                                        cursor: 'pointer',
+                                        fontSize: '0.875rem',
+                                        fontWeight: 600,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                        transition: 'all 0.2s'
+                                    }}
+                                    title="List View"
+                                >
+                                    <span>☰</span>
+                                    <span>List</span>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                            <button
+                                onClick={() => setGroupTab('all')}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: 9999,
+                                    border: '1px solid #cbd5e1',
+                                    background: groupTab === 'all' ? '#2563eb' : '#f8fafc',
+                                    color: groupTab === 'all' ? '#fff' : '#0f172a',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                {t('allGroups')} ({counts.all})
+                            </button>
+                            <button
+                                onClick={() => setGroupTab('inprogress')}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: 9999,
+                                    border: '1px solid #cbd5e1',
+                                    background: groupTab === 'inprogress' ? '#2563eb' : '#f8fafc',
+                                    color: groupTab === 'inprogress' ? '#fff' : '#0f172a',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                {t('inProgress')} ({counts.inprogress})
+                            </button>
+                            <button
+                                onClick={() => setGroupTab('new')}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: 9999,
+                                    border: '1px solid #cbd5e1',
+                                    background: groupTab === 'new' ? '#2563eb' : '#f8fafc',
+                                    color: groupTab === 'new' ? '#fff' : '#0f172a',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                {t('newGroups')} ({counts.new})
+                            </button>
+                            <button
+                                onClick={() => setGroupTab('closed')}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: 9999,
+                                    border: '1px solid #cbd5e1',
+                                    background: groupTab === 'closed' ? '#2563eb' : '#f8fafc',
+                                    color: groupTab === 'closed' ? '#fff' : '#0f172a',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                {t('closedGroups')} ({counts.closed})
+                            </button>
+                        </div>
+
+                            {loading ? (
+                                <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>{t('loadingGroups')}</div>
+                            ) : error ? (
+                                <div style={{ textAlign: 'center', padding: '40px', color: '#dc2626' }}>{error}</div>
+                            ) : groups.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>
+                                    <p>{t('noGroupsFound')}</p>
+                                    {isLoggedIn && (
+                                        <Link
+                                            to="/groups/new"
+                                            style={{
+                                                display: 'inline-block',
+                                                marginTop: 12,
+                                                padding: '10px 16px',
+                                                background: '#2563eb',
+                                                color: '#fff',
+                                                borderRadius: 8,
+                                                textDecoration: 'none'
+                                            }}
+                                        >
+                                            {t('createFirstGroup')}
+                                        </Link>
+                                    )}
+                                </div>
+                            ) : (
+                                <div style={groupView === 'card' 
+                                    ? { display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }
+                                    : { display: 'flex', flexDirection: 'column', gap: 12 }
+                                }>
+                                    {groups.map(group => {
+                                        const createdDate = new Date(group.created_at)
+                                        const formattedDate = createdDate.toLocaleDateString('en-US', {
+                                            day: 'numeric',
+                                            month: 'short',
+                                            year: 'numeric'
+                                        })
+                                        const pendingMembers = group.pending_members || 0
+                                        const addedMembers = group.added_members || 0
+                                        const amount = parseFloat(group.amount.toString())
+                                        const isCreatedByMe = currentUserId && group.created_by === currentUserId
+                                        const isJoinedGroup = !isCreatedByMe
+                                        
+                                        // List view layout
+                                        if (groupView === 'list') {
+                                            return (
+                                                <Link
+                                                    to={`/groups/${group.id}`}
+                                                    key={group.id}
+                                                    style={{
+                                                        textDecoration: 'none',
+                                                        color: 'inherit',
+                                                        display: 'block'
+                                                    }}
+                                                >
+                                                    <div style={{
+                                                        border: '1px solid #e5e7eb',
+                                                        borderRadius: 12,
+                                                        padding: 16,
+                                                        background: isJoinedGroup ? '#f8fafc' : '#ffffff',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: 16,
+                                                        transition: 'all 0.2s',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                    onMouseEnter={(e) => {
+                                                        e.currentTarget.style.borderColor = '#2563eb'
+                                                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(37, 99, 235, 0.1)'
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        e.currentTarget.style.borderColor = '#e5e7eb'
+                                                        e.currentTarget.style.boxShadow = 'none'
+                                                    }}
+                                                    >
+                                                        {/* Group Name */}
+                                                        <div style={{ flex: '0 0 200px', minWidth: 0 }}>
+                                                            <h4 style={{ 
+                                                                margin: 0, 
+                                                                fontSize: '1rem', 
+                                                                fontWeight: 700, 
+                                                                color: '#1e293b',
+                                                                marginBottom: 4
+                                                            }}>
+                                                                {group.name}
+                                                            </h4>
+                                                            <p style={{ 
+                                                                margin: 0, 
+                                                                fontSize: '0.75rem', 
+                                                                color: '#64748b' 
+                                                            }}>
+                                                                Created: {formattedDate}
+                                                            </p>
+                                                        </div>
+
+                                                        {/* Status Badge */}
+                                                        <div style={{ flex: '0 0 100px' }}>
+                                                            <span style={{
+                                                                padding: '4px 8px',
+                                                                borderRadius: 6,
+                                                                fontSize: '0.75rem',
+                                                                fontWeight: 500,
+                                                                background: group.status === 'new' ? '#eff6ff' :
+                                                                    group.status === 'inprogress' ? '#fef3c7' : '#f3f4f6',
+                                                                color: group.status === 'new' ? '#2563eb' :
+                                                                    group.status === 'inprogress' ? '#d97706' : '#6b7280'
+                                                            }}>
+                                                                {group.status === 'new' ? t('new') :
+                                                                    group.status === 'inprogress' ? t('inProgress') : t('closed')}
+                                                            </span>
+                                                        </div>
+
+                                                        {/* Amount */}
+                                                        <div style={{ flex: '0 0 120px', textAlign: 'right' }}>
+                                                            <div style={{ color: '#64748b', fontSize: '0.75rem', marginBottom: 2 }}>Amount</div>
+                                                            <div style={{ color: '#1e293b', fontSize: '0.875rem', fontWeight: 700 }}>
+                                                                ₹{amount.toLocaleString()}
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Members */}
+                                                        <div style={{ flex: '0 0 100px', textAlign: 'right' }}>
+                                                            <div style={{ color: '#64748b', fontSize: '0.75rem', marginBottom: 2 }}>Members</div>
+                                                            <div style={{ color: '#1e293b', fontSize: '0.875rem', fontWeight: 600 }}>
+                                                                {group.number_of_members || 0}
+                                                            </div>
+                                                        </div>
+
+                                                        {/* First Auction */}
+                                                        {group.first_auction_date && (
+                                                            <div style={{ flex: '0 0 120px', textAlign: 'right' }}>
+                                                                <div style={{ color: '#64748b', fontSize: '0.75rem', marginBottom: 2 }}>First Auction</div>
+                                                                <div style={{ color: '#1e293b', fontSize: '0.875rem', fontWeight: 600 }}>
+                                                                    {new Date(group.first_auction_date).toLocaleDateString()}
+                                                                </div>
+                                                            </div>
+                                                        )}
+
+                                                        {/* Add Members Button */}
+                                                        {pendingMembers > 0 && (
+                                                            <div style={{ flex: '0 0 auto' }}>
+                                                                <Link
+                                                                    to={`/groups/${group.id}`}
+                                                                    className="pending-members-button"
+                                                                    style={{
+                                                                        display: 'inline-block',
+                                                                        padding: '8px 16px',
+                                                                        fontSize: '0.75rem',
+                                                                        background: '#10b981',
+                                                                        color: '#fff',
+                                                                        borderRadius: 8,
+                                                                        textDecoration: 'none',
+                                                                        textAlign: 'center',
+                                                                        fontWeight: 600,
+                                                                        border: '1px solid #059669',
+                                                                        transition: 'all 0.2s',
+                                                                        whiteSpace: 'nowrap'
+                                                                    }}
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                    onMouseEnter={(e) => {
+                                                                        e.currentTarget.style.background = '#059669'
+                                                                        e.currentTarget.style.animation = 'none'
+                                                                    }}
+                                                                    onMouseLeave={(e) => {
+                                                                        e.currentTarget.style.background = '#10b981'
+                                                                        e.currentTarget.style.animation = 'pulse-glow-bounce 2.5s ease-in-out infinite'
+                                                                    }}
+                                                                >
+                                                                    Add {pendingMembers} member{pendingMembers !== 1 ? 's' : ''}
+                                                                </Link>
+                                                            </div>
+                                                        )}
+
+                                                        {/* Auction Status Badge for inprogress groups */}
+                                                        {group.status === 'inprogress' && group.auction_status && (
+                                                            <div style={{ flex: '0 0 auto' }}>
+                                                                {group.auction_status === 'open' ? (
+                                                                    <div
+                                                                        className="live-auction-open"
+                                                                        style={{
+                                                                            padding: '6px 12px',
+                                                                            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                                                            color: '#fff',
+                                                                            borderRadius: 6,
+                                                                            fontSize: '0.75rem',
+                                                                            fontWeight: 700,
+                                                                            boxShadow: '0 2px 8px rgba(16, 185, 129, 0.4)',
+                                                                            whiteSpace: 'nowrap',
+                                                                            animation: 'live-auction-pulse 2s infinite',
+                                                                            display: 'flex',
+                                                                            alignItems: 'center',
+                                                                            gap: 6
+                                                                        }}
+                                                                    >
+                                                                        <span style={{ 
+                                                                            animation: 'live-auction-blink 1.5s infinite'
+                                                                        }}>🔴</span>
+                                                                        <span style={{ animation: 'live-auction-text-glow 2s infinite' }}>
+                                                                            LIVE
+                                                                        </span>
+                                                                    </div>
+                                                                ) : group.auction_status === 'closed' ? (
+                                                                    <div
+                                                                        style={{
+                                                                            padding: '6px 12px',
+                                                                            background: '#fee2e2',
+                                                                            color: '#dc2626',
+                                                                            borderRadius: 6,
+                                                                            fontSize: '0.75rem',
+                                                                            fontWeight: 700,
+                                                                            border: '2px solid #dc2626',
+                                                                            whiteSpace: 'nowrap'
+                                                                        }}
+                                                                    >
+                                                                        Closed
+                                                                    </div>
+                                                                ) : null}
+                                                            </div>
+                                                        )}
+
+                                                        {/* Actions */}
+                                                        <div style={{ flex: '0 0 auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                                                            {isLoggedIn && (
+                                                                <>
+                                                                    {group.status === 'inprogress' ? (
+                                                                        <Link
+                                                                            to={`/groups/${group.id}`}
+                                                                            style={{
+                                                                                padding: '8px 16px',
+                                                                                fontSize: '0.75rem',
+                                                                                background: group.auction_status === 'open' 
+                                                                                    ? 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)'
+                                                                                    : '#2563eb',
+                                                                                color: '#fff',
+                                                                                borderRadius: 6,
+                                                                                textDecoration: 'none',
+                                                                                fontWeight: 700,
+                                                                                whiteSpace: 'nowrap',
+                                                                                boxShadow: group.auction_status === 'open' 
+                                                                                    ? '0 4px 12px rgba(37, 99, 235, 0.4)'
+                                                                                    : '0 2px 4px rgba(0, 0, 0, 0.1)',
+                                                                                animation: group.auction_status === 'open' 
+                                                                                    ? 'live-auction-button-pulse 2s infinite' 
+                                                                                    : 'none',
+                                                                                transition: 'all 0.2s'
+                                                                            }}
+                                                                            onClick={(e) => e.stopPropagation()}
+                                                                            onMouseEnter={(e) => {
+                                                                                e.currentTarget.style.transform = 'translateY(-2px)'
+                                                                                e.currentTarget.style.boxShadow = '0 6px 16px rgba(37, 99, 235, 0.5)'
+                                                                            }}
+                                                                            onMouseLeave={(e) => {
+                                                                                e.currentTarget.style.transform = 'translateY(0)'
+                                                                                e.currentTarget.style.boxShadow = group.auction_status === 'open' 
+                                                                                    ? '0 4px 12px rgba(37, 99, 235, 0.4)'
+                                                                                    : '0 2px 4px rgba(0, 0, 0, 0.1)'
+                                                                            }}
+                                                                        >
+                                                                            {group.auction_status === 'open' ? '🚀 Participate' : 'View'}
+                                                                        </Link>
+                                                                    ) : (
+                                                                        <>
+                                                                            <Link
+                                                                                to={`/groups/${group.id}/features`}
+                                                                                style={{
+                                                                                    padding: '6px 12px',
+                                                                                    fontSize: '0.75rem',
+                                                                                    background: '#f1f5f9',
+                                                                                    color: '#1e293b',
+                                                                                    borderRadius: 6,
+                                                                                    textDecoration: 'none',
+                                                                                    border: '1px solid #e2e8f0',
+                                                                                    whiteSpace: 'nowrap'
+                                                                                }}
+                                                                                onClick={(e) => e.stopPropagation()}
+                                                                            >
+                                                                                {t('manageFeatures')}
+                                                                            </Link>
+                                                                            {group.status === 'new' && isCreatedByMe && (
+                                                                                <button
+                                                                                    onClick={(e) => {
+                                                                                        e.preventDefault()
+                                                                                        e.stopPropagation()
+                                                                                        handleDeleteGroup(group.id, group.name)
+                                                                                    }}
+                                                                                    disabled={deletingGroupId === group.id}
+                                                                                    style={{
+                                                                                        padding: '6px 12px',
+                                                                                        fontSize: '0.75rem',
+                                                                                        background: deletingGroupId === group.id ? '#94a3b8' : '#dc2626',
+                                                                                        color: '#fff',
+                                                                                        border: 'none',
+                                                                                        borderRadius: 6,
+                                                                                        cursor: deletingGroupId === group.id ? 'not-allowed' : 'pointer',
+                                                                                        fontWeight: 500,
+                                                                                        whiteSpace: 'nowrap'
+                                                                                    }}
+                                                                                >
+                                                                                    {deletingGroupId === group.id ? 'Deleting...' : `🗑️ ${t('delete')}`}
+                                                                                </button>
+                                                                            )}
+                                                                        </>
+                                                                    )}
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </Link>
+                                            )
+                                        }
+                                        
+                                        // Card view layout (existing)
+                                        return (
+                                            <Link
+                                                to={`/groups/${group.id}`}
+                                                key={group.id}
+                                                style={{
+                                                    textDecoration: 'none',
+                                                    color: 'inherit'
+                                                }}
+                                            >
+                                                <div style={{
+                                                    border: '1px solid #e5e7eb',
+                                                    borderRadius: 12,
+                                                    padding: 16,
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.2s',
+                                                    background: isJoinedGroup ? '#f8fafc' : '#ffffff'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.borderColor = '#2563eb'
+                                                    e.currentTarget.style.boxShadow = '0 2px 8px rgba(37, 99, 235, 0.1)'
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.borderColor = '#e5e7eb'
+                                                    e.currentTarget.style.boxShadow = 'none'
+                                                }}
+                                                >
+                                                {/* Group Name, Manage Features, Delete Button Row */}
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 8 }}>
+                                                    <h4 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 600, color: '#1e293b', flex: 1, lineHeight: 1.3 }}>
+                                                        {group.name}
+                                                    </h4>
+                                                    <div style={{ display: 'flex', gap: 8 }}>
+                                                        <Link
+                                                            to={`/groups/${group.id}/features`}
+                                                            style={{
+                                                                padding: '6px 12px',
+                                                                background: '#f1f5f9',
+                                                                color: '#475569',
+                                                                borderRadius: 6,
+                                                                fontSize: '0.75rem',
+                                                                fontWeight: 600,
+                                                                textDecoration: 'none',
+                                                                border: '1px solid #e2e8f0'
+                                                            }}
+                                                        >
+                                                            Manage Features
+                                                        </Link>
+                                                        <button
+                                                            onClick={() => handleDeleteGroup(group.id, group.name)}
+                                                            disabled={deletingGroupId === group.id}
+                                                            style={{
+                                                                padding: '6px 12px',
+                                                                background: deletingGroupId === group.id ? '#f1f5f9' : '#fee2e2',
+                                                                color: deletingGroupId === group.id ? '#94a3b8' : '#dc2626',
+                                                                borderRadius: 6,
+                                                                fontSize: '0.75rem',
+                                                                fontWeight: 600,
+                                                                border: '1px solid #fecaca',
+                                                                cursor: deletingGroupId === group.id ? 'not-allowed' : 'pointer'
+                                                            }}
+                                                        >
+                                                            {deletingGroupId === group.id ? 'Deleting...' : 'Delete'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Created Date */}
+                                                <p style={{ margin: '0 0 12px 0', fontSize: '0.75rem', color: '#64748b' }}>
+                                                    Created: {formattedDate}
+                                                </p>
+
+                                                {/* Amount, Members, First Auction, Add Members Row */}
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+                                                    <div style={{ fontSize: '0.875rem' }}>
+                                                        <span style={{ color: '#64748b' }}>Amount: </span>
+                                                        <span style={{ fontWeight: 600, color: '#1e293b' }}>₹{group.amount.toLocaleString()}</span>
+                                                    </div>
+                                                    <div style={{ fontSize: '0.875rem' }}>
+                                                        <span style={{ color: '#64748b' }}>Members: </span>
+                                                        <span style={{ fontWeight: 600, color: '#1e293b' }}>{group.number_of_members || 0}</span>
+                                                    </div>
+                                                    {group.first_auction_date && (
+                                                        <div style={{ fontSize: '0.875rem' }}>
+                                                            <span style={{ color: '#64748b' }}>First Auction: </span>
+                                                            <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                                                                {new Date(group.first_auction_date).toLocaleDateString('en-US', {
+                                                                    month: 'short',
+                                                                    day: 'numeric'
+                                                                })}
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                    {pendingMembers > 0 && (
+                                                        <button
+                                                            onClick={() => navigate(`/groups/${group.id}`)}
+                                                            className="pending-members-button"
+                                                            style={{
+                                                                padding: '6px 12px',
+                                                                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                                                color: '#fff',
+                                                                border: 'none',
+                                                                borderRadius: 6,
+                                                                fontSize: '0.75rem',
+                                                                fontWeight: 700,
+                                                                cursor: 'pointer',
+                                                                boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
+                                                            }}
+                                                        >
+                                                            Add {pendingMembers} member{pendingMembers !== 1 ? 's' : ''}
+                                                        </button>
+                                                    )}
+                                                </div>
+
+                                                {/* Auction Status and View Button for inprogress groups */}
+                                                {group.status === 'inprogress' ? (
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                                        {/* Auction Status */}
+                                                        {group.auction_status === 'open' ? (
+                                                            <div
+                                                                className="live-auction-open"
+                                                                style={{
+                                                                    padding: '10px 16px',
+                                                                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                                                    color: '#fff',
+                                                                    borderRadius: 8,
+                                                                    textAlign: 'center',
+                                                                    fontSize: '0.875rem',
+                                                                    fontWeight: 700,
+                                                                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4)',
+                                                                    position: 'relative',
+                                                                    overflow: 'hidden',
+                                                                    animation: 'live-auction-pulse 2s infinite'
+                                                                }}
+                                                            >
+                                                                <span style={{ 
+                                                                    display: 'inline-block',
+                                                                    animation: 'live-auction-blink 1.5s infinite',
+                                                                    marginRight: 8
+                                                                }}>🔴</span>
+                                                                <span style={{ animation: 'live-auction-text-glow 2s infinite' }}>
+                                                                    LIVE AUCTION OPEN
+                                                                </span>
+                                                            </div>
+                                                        ) : group.auction_status === 'closed' ? (
+                                                            <div
+                                                                style={{
+                                                                    padding: '10px 16px',
+                                                                    background: '#fee2e2',
+                                                                    color: '#dc2626',
+                                                                    borderRadius: 8,
+                                                                    textAlign: 'center',
+                                                                    fontSize: '0.875rem',
+                                                                    fontWeight: 700,
+                                                                    border: '2px solid #dc2626'
+                                                                }}
+                                                            >
+                                                                Live Auction Closed
+                                                            </div>
+                                                        ) : null}
+                                                        
+                                                        {/* View Button */}
+                                                        <Link
+                                                            to={`/groups/${group.id}`}
+                                                            style={{
+                                                                width: '100%',
+                                                                padding: '10px 16px',
+                                                                background: group.auction_status === 'open' 
+                                                                    ? 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)'
+                                                                    : '#2563eb',
+                                                                color: '#fff',
+                                                                borderRadius: 8,
+                                                                textAlign: 'center',
+                                                                textDecoration: 'none',
+                                                                fontSize: '0.875rem',
+                                                                fontWeight: 700,
+                                                                transition: 'all 0.2s',
+                                                                boxShadow: group.auction_status === 'open' 
+                                                                    ? '0 4px 12px rgba(37, 99, 235, 0.4)'
+                                                                    : '0 2px 4px rgba(0, 0, 0, 0.1)',
+                                                                animation: group.auction_status === 'open' 
+                                                                    ? 'live-auction-button-pulse 2s infinite' 
+                                                                    : 'none'
+                                                            }}
+                                                            onMouseEnter={(e) => {
+                                                                e.currentTarget.style.background = '#1e40af'
+                                                                e.currentTarget.style.transform = 'translateY(-2px)'
+                                                                e.currentTarget.style.boxShadow = '0 6px 16px rgba(37, 99, 235, 0.5)'
+                                                            }}
+                                                            onMouseLeave={(e) => {
+                                                                e.currentTarget.style.background = group.auction_status === 'open' 
+                                                                    ? 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)'
+                                                                    : '#2563eb'
+                                                                e.currentTarget.style.transform = 'translateY(0)'
+                                                                e.currentTarget.style.boxShadow = group.auction_status === 'open' 
+                                                                    ? '0 4px 12px rgba(37, 99, 235, 0.4)'
+                                                                    : '0 2px 4px rgba(0, 0, 0, 0.1)'
+                                                            }}
+                                                        >
+                                                            {group.auction_status === 'open' ? '🚀 Participate Now' : 'View'}
+                                                        </Link>
+                                                    </div>
+                                                ) : (
+                                                    <div style={{ display: 'flex', gap: 8 }}>
+                                                        <Link
+                                                            to={`/groups/${group.id}`}
+                                                            style={{
+                                                                flex: 1,
+                                                                padding: '8px 12px',
+                                                                background: '#2563eb',
+                                                                color: '#fff',
+                                                                borderRadius: 6,
+                                                                textAlign: 'center',
+                                                                textDecoration: 'none',
+                                                                fontSize: '0.875rem',
+                                                                fontWeight: 600,
+                                                                transition: 'all 0.2s'
+                                                            }}
+                                                            onMouseEnter={(e) => {
+                                                                e.currentTarget.style.background = '#1e40af'
+                                                                e.currentTarget.style.transform = 'translateY(-1px)'
+                                                            }}
+                                                            onMouseLeave={(e) => {
+                                                                e.currentTarget.style.background = '#2563eb'
+                                                                e.currentTarget.style.transform = 'translateY(0)'
+                                                            }}
+                                                        >
+                                                            View
+                                                        </Link>
+                                                        <Link
+                                                            to={`/groups/${group.id}`}
+                                                            style={{
+                                                                flex: 1,
+                                                                padding: '8px 12px',
+                                                                background: '#f1f5f9',
+                                                                color: '#475569',
+                                                                borderRadius: 6,
+                                                                textAlign: 'center',
+                                                                textDecoration: 'none',
+                                                                fontSize: '0.875rem',
+                                                                fontWeight: 600,
+                                                                border: '1px solid #cbd5e1',
+                                                                transition: 'all 0.2s'
+                                                            }}
+                                                            onMouseEnter={(e) => {
+                                                                e.currentTarget.style.background = '#e2e8f0'
+                                                                e.currentTarget.style.borderColor = '#94a3b8'
+                                                            }}
+                                                            onMouseLeave={(e) => {
+                                                                e.currentTarget.style.background = '#f1f5f9'
+                                                                e.currentTarget.style.borderColor = '#cbd5e1'
+                                                            }}
+                                                        >
+                                                            Details
+                                                        </Link>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            </Link>
+                                        )
+                                    })}
+                                </div>
+                            )}
+                        </section>
                     </div>
-                )}
-            </section>
-            <section style={{ marginTop: 24 }}>
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 24, background: '#ffffff' }}>
-                    <h2 style={{ marginTop: 0, marginBottom: 8 }}>{t('smartPools')}</h2>
-                    <p style={{ color: '#555', marginTop: 0 }}>
-                        Create or join rotating savings pools (chit-like) with automated schedules, transparent auctions, and instant notifications.
-                    </p>
-                    <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
-                        <Link to="/signup" style={{ padding: '10px 16px', background: '#2563eb', color: '#fff', borderRadius: 8, border: '1px solid #1e40af' }}>{t('getStarted')}</Link>
-                        <Link to="/login" style={{ padding: '10px 16px', border: '1px solid #cbd5e1', borderRadius: 8 }}>{t('alreadyHaveAccount')}</Link>
-                    </div>
-                </div>
-            </section>
-            <section style={{ marginTop: 24, display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, background: '#fcfcfd' }}>
-                    <h3 style={{ marginTop: 0 }}>Transparent</h3>
-                    <p style={{ color: '#555' }}>Live auction logs, member activity, and payout history for full trust.</p>
-                </div>
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, background: '#fcfcfd' }}>
-                    <h3 style={{ marginTop: 0 }}>Flexible</h3>
-                    <p style={{ color: '#555' }}>Set pool amount, tenure, and frequency that works for your group.</p>
-                </div>
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, background: '#fcfcfd' }}>
-                    <h3 style={{ marginTop: 0 }}>Secure</h3>
-                    <p style={{ color: '#555' }}>PIN-based login with OTP verification. Your data stays protected.</p>
-                </div>
-            </section>
-            
+
+
+            {/* Participation Modal */}
+            {participationModal && (
+                <AuctionParticipationModal
+                    groupId={participationModal.groupId}
+                    groupName={participationModal.groupName}
+                    groupAmount={participationModal.groupAmount}
+                    auctionStartAt={participationModal.auctionStartAt}
+                    auctionEndAt={participationModal.auctionEndAt}
+                    onClose={() => setParticipationModal(null)}
+                />
+            )}
+
             {/* Scroll to Top Button */}
             {showScrollTop && (
                 <button

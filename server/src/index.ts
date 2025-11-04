@@ -32,8 +32,32 @@ const server = http.createServer(app);
 const io = new SocketIOServer(server, { cors: { origin: '*' } });
 
 io.on('connection', (socket) => {
-    console.log('socket connected', socket.id);
-    socket.on('disconnect', () => console.log('socket disconnected', socket.id));
+    console.log('🔌 Socket connected:', socket.id);
+
+    // Join group room when user subscribes to a group's auction
+    socket.on('auction:join', (data: { group_id: string, user_id?: string }) => {
+        if (data.group_id) {
+            socket.join(`group:${data.group_id}`);
+            console.log(`👤 User ${socket.id} joined group room: group:${data.group_id}`);
+            
+            if (data.user_id) {
+                socket.join(`user:${data.user_id}`);
+                console.log(`👤 User ${socket.id} joined user room: user:${data.user_id}`);
+            }
+        }
+    });
+
+    // Leave group room
+    socket.on('auction:leave', (data: { group_id: string }) => {
+        if (data.group_id) {
+            socket.leave(`group:${data.group_id}`);
+            console.log(`👤 User ${socket.id} left group room: group:${data.group_id}`);
+        }
+    });
+
+    socket.on('disconnect', () => {
+        console.log('🔌 Socket disconnected:', socket.id);
+    });
 });
 
 app.get('/health', (_req, res) => res.json({ ok: true }));

@@ -1,13 +1,15 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
 import { useLanguage } from '../state/LanguageContext'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 export default function Header() {
     const { state, dispatch } = useAuth()
     const navigate = useNavigate()
     const { language, setLanguage, t } = useLanguage()
-    const isLoggedIn = !!state.token
+    // Check both state.token and localStorage for token (similar to Home.tsx)
+    const tokenFromStorage = localStorage.getItem('token')
+    const isLoggedIn = !!(state.token || tokenFromStorage)
     const isAdmin = state.role === 'admin' || state.role === 'productowner'
     const initials = (state.name?.trim()?.[0] ?? state.phone?.trim()?.[0] ?? '?').toUpperCase()
     const [showLangDropdown, setShowLangDropdown] = useState(false)
@@ -19,6 +21,45 @@ export default function Header() {
         { code: 'kn', name: 'ಕನ್ನಡ' },
         { code: 'hi', name: 'हिंदी' }
     ]
+
+    // Fetch user name if logged in but name is not available
+    useEffect(() => {
+        const token = state.token || tokenFromStorage
+        // Fetch if we have a token but no name (or name is empty/whitespace)
+        if (token && (!state.name || !state.name.trim())) {
+            console.log('[Header] Fetching profile to get user name...', { hasToken: !!token, currentName: state.name })
+            fetch('/profile', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+                .then(res => {
+                    console.log('[Header] Profile response status:', res.status, res.statusText)
+                    if (res.ok) {
+                        return res.json()
+                    }
+                    console.error('[Header] Profile fetch failed:', res.status, res.statusText)
+                    return null
+                })
+                .then(data => {
+                    console.log('[Header] Profile data received:', data)
+                    if (data?.user) {
+                        console.log('[Header] User data:', { name: data.user.name, phone: data.user.phone, email: data.user.email })
+                        if (data.user.name && data.user.name.trim()) {
+                            console.log('[Header] Setting name in auth context:', data.user.name.trim())
+                            dispatch({ type: 'SET_PROFILE', name: data.user.name.trim() })
+                        } else {
+                            console.log('[Header] User name is empty or null in database')
+                        }
+                    } else {
+                        console.log('[Header] No user data found in profile response')
+                    }
+                })
+                .catch(err => {
+                    console.error('[Header] Failed to fetch profile:', err)
+                })
+        }
+    }, [state.token, state.name, tokenFromStorage, dispatch])
 
     function logout() {
         // Clear localStorage
@@ -158,7 +199,18 @@ export default function Header() {
                                         {initials}
                                     </div>
                                 )}
-                                <span style={{ color: '#334155' }}>{state.name ?? state.phone}</span>
+                                <span style={{ color: '#334155' }}>
+                                    {(() => {
+                                        console.log('[Header] Rendering name display:', { name: state.name, phone: state.phone })
+                                        if (state.name && state.name.trim()) {
+                                            return `Hi ${state.name}`
+                                        } else if (state.phone) {
+                                            return `Hi ${state.phone}`
+                                        } else {
+                                            return 'Hi User'
+                                        }
+                                    })()}
+                                </span>
                             </div>
                             <button onClick={logout} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f8fafc' }}>{t('logout')}</button>
                         </>

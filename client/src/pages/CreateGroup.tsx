@@ -115,7 +115,7 @@ export default function CreateGroup() {
     }
 
     // Group Type
-    const [groupType, setGroupType] = useState<'deductive'>('deductive')
+    const [groupType] = useState<'deductive'>('deductive')
 
     // Auction Settings
     const [firstAuctionDate, setFirstAuctionDate] = useState('')
@@ -187,9 +187,15 @@ export default function CreateGroup() {
 
     async function handleSubmit() {
         try {
+            // Check both state.token and localStorage for token (similar to other pages)
+            const tokenFromStorage = localStorage.getItem('token')
+            const currentToken = state.token || tokenFromStorage
+            
             const headers: HeadersInit = { 'Content-Type': 'application/json' }
-            if (state.token) {
-                headers['Authorization'] = `Bearer ${state.token}`
+            if (currentToken) {
+                headers['Authorization'] = `Bearer ${currentToken}`
+            } else {
+                console.warn('[CreateGroup] No token found in state or localStorage')
             }
 
             // Prepare the data to send
@@ -220,7 +226,7 @@ export default function CreateGroup() {
             })
 
             if (response.ok) {
-                const group = await response.json()
+                await response.json()
                 navigate(`/home`)
                 alert('Group created successfully!')
             } else {
@@ -259,8 +265,7 @@ export default function CreateGroup() {
             <div style={{
                 display: 'grid',
                 gap: 24,
-                gridTemplateColumns: '280px 1fr',
-                '@media (max-width: 768px)': { gridTemplateColumns: '1fr' }
+                gridTemplateColumns: '280px 1fr'
             }}>
                 {/* Progress Sidebar */}
                 <aside style={{
@@ -1044,7 +1049,7 @@ function ProgressStep({ number, label, active, completed }: { number: number; la
     )
 }
 
-function TypeOption({ value, selected, onClick, title, description, features }: {
+function _TypeOption({ value: _value, selected, onClick, title, description, features }: {
     value: string
     selected: boolean
     onClick: () => void

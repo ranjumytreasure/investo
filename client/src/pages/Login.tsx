@@ -30,6 +30,25 @@ export default function Login() {
             if (data.role) {
                 dispatch({ type: 'SET_ROLE', role: data.role })
             }
+            
+            // Fetch user profile to get name
+            try {
+                const profileRes = await fetch('/profile', {
+                    headers: {
+                        'Authorization': `Bearer ${data.token}`
+                    }
+                })
+                if (profileRes.ok) {
+                    const profileData = await profileRes.json()
+                    if (profileData?.user?.name) {
+                        dispatch({ type: 'SET_PROFILE', name: profileData.user.name })
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to fetch profile:', err)
+                // Continue even if profile fetch fails
+            }
+            
             navigate('/home')
         } else {
             setError(data?.error || 'Invalid credentials')

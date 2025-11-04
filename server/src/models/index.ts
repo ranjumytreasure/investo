@@ -41,12 +41,14 @@ User.hasMany(GroupUserShare, { foreignKey: 'user_id' });
 GroupUserShare.belongsTo(User, { foreignKey: 'user_id' }); // user_id is nullable for pending invites
 
 // Accounts & auctions
-Group.hasMany(GroupAccount, { foreignKey: 'group_id' });
-GroupAccount.belongsTo(Group, { foreignKey: 'group_id' });
+Group.hasMany(GroupAccount, { foreignKey: 'group_id', as: 'accounts' });
+GroupAccount.belongsTo(Group, { foreignKey: 'group_id', as: 'group' });
 Group.hasMany(Auction, { foreignKey: 'group_id' });
 Auction.belongsTo(Group, { foreignKey: 'group_id' });
 GroupAccount.hasMany(Auction, { foreignKey: 'group_account_id' });
 Auction.belongsTo(GroupAccount, { foreignKey: 'group_account_id' });
+GroupUserShare.hasMany(Auction, { foreignKey: 'group_usershare_id' });
+Auction.belongsTo(GroupUserShare, { foreignKey: 'group_usershare_id', as: 'share' });
 User.hasMany(Auction, { foreignKey: 'user_id' });
 Auction.belongsTo(User, { foreignKey: 'user_id' });
 

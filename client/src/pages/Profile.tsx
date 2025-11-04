@@ -41,7 +41,7 @@ interface Address {
 
 export default function Profile() {
     const { state, dispatch } = useAuth()
-    const { t } = useLanguage()
+    const { t: _t } = useLanguage()
     const navigate = useNavigate()
     const [profile, setProfile] = useState<UserProfile | null>(null)
     const [addresses, setAddresses] = useState<Address[]>([])
@@ -70,21 +70,40 @@ export default function Profile() {
     })
 
     useEffect(() => {
-        if (!state.token) {
+        // Check both state.token and localStorage for token (similar to Home.tsx and Header.tsx)
+        const tokenFromStorage = localStorage.getItem('token')
+        const currentToken = state.token || tokenFromStorage
+        
+        if (!currentToken) {
+            console.log('[Profile] No token found, redirecting to login')
             navigate('/login')
             return
         }
+        
+        // If token exists in localStorage but not in state, update state
+        if (tokenFromStorage && !state.token) {
+            dispatch({ type: 'SET_TOKEN', token: tokenFromStorage })
+        }
+        
         fetchProfile()
-    }, [state.token])
+    }, [state.token, navigate, dispatch])
 
     async function fetchProfile() {
-        if (!state.token) return
+        // Check both state.token and localStorage for token
+        const tokenFromStorage = localStorage.getItem('token')
+        const currentToken = state.token || tokenFromStorage
+        
+        if (!currentToken) {
+            console.log('[Profile] No token available for profile fetch')
+            return
+        }
+        
         setLoading(true)
         setError(null)
         try {
             const response = await fetch('/profile', {
                 headers: {
-                    'Authorization': `Bearer ${state.token}`
+                    'Authorization': `Bearer ${currentToken}`
                 }
             })
             if (response.ok) {
@@ -112,14 +131,17 @@ export default function Profile() {
     }
 
     async function handleSaveProfile() {
-        if (!state.token) return
+        const tokenFromStorage = localStorage.getItem('token')
+        const currentToken = state.token || tokenFromStorage
+        if (!currentToken) return
+        
         setSaving(true)
         setError(null)
         try {
             const response = await fetch('/profile', {
                 method: 'PUT',
                 headers: {
-                    'Authorization': `Bearer ${state.token}`,
+                    'Authorization': `Bearer ${currentToken}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ name, email })
@@ -146,7 +168,10 @@ export default function Profile() {
     }
 
     async function handleSaveAddress() {
-        if (!state.token) return
+        const tokenFromStorage = localStorage.getItem('token')
+        const currentToken = state.token || tokenFromStorage
+        if (!currentToken) return
+        
         setSaving(true)
         setError(null)
         try {
@@ -158,7 +183,7 @@ export default function Profile() {
             const response = await fetch(url, {
                 method,
                 headers: {
-                    'Authorization': `Bearer ${state.token}`,
+                    'Authorization': `Bearer ${currentToken}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(addressForm)
@@ -191,14 +216,17 @@ export default function Profile() {
     }
 
     async function handleDeleteAddress(addressId: string) {
-        if (!state.token) return
+        const tokenFromStorage = localStorage.getItem('token')
+        const currentToken = state.token || tokenFromStorage
+        if (!currentToken) return
+        
         if (!confirm('Are you sure you want to delete this address?')) return
         
         try {
             const response = await fetch(`/profile/addresses/${addressId}`, {
                 method: 'DELETE',
                 headers: {
-                    'Authorization': `Bearer ${state.token}`
+                    'Authorization': `Bearer ${currentToken}`
                 }
             })
             if (response.ok) {
@@ -215,7 +243,10 @@ export default function Profile() {
     }
 
     async function handleDeleteAccount() {
-        if (!state.token) return
+        const tokenFromStorage = localStorage.getItem('token')
+        const currentToken = state.token || tokenFromStorage
+        if (!currentToken) return
+        
         const confirm1 = window.confirm(
             'Are you sure you want to delete your account?\n\n' +
             'This will permanently delete:\n' +
@@ -233,7 +264,7 @@ export default function Profile() {
             const response = await fetch('/profile', {
                 method: 'DELETE',
                 headers: {
-                    'Authorization': `Bearer ${state.token}`
+                    'Authorization': `Bearer ${currentToken}`
                 }
             })
             if (response.ok) {
