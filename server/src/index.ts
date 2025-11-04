@@ -11,6 +11,7 @@ import { sequelize } from './lib/sequelize';
 import { registerAuthRoutes } from './routes/auth';
 import { registerGroupRoutes } from './routes/groups';
 import { registerAdminRoutes } from './routes/admin';
+import { registerProfileRoutes } from './routes/profile';
 import { startAuctionCron } from './cron/auctions';
 
 const app = express();
@@ -40,6 +41,7 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 registerAuthRoutes(app, io);
 registerGroupRoutes(app, io);
 registerAdminRoutes(app);
+registerProfileRoutes(app);
 
 startAuctionCron(io);
 

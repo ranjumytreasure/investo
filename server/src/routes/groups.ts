@@ -86,7 +86,32 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                     new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
                 );
 
-                return res.json(allGroups);
+                // Add member statistics for each group
+                const groupsWithStats = await Promise.all(
+                    allGroups.map(async (group) => {
+                        const groupJson = group.toJSON ? group.toJSON() : group;
+                        const totalMembers = groupJson.number_of_members || 0;
+                        
+                        // Count added members (accepted or active shares)
+                        const addedMembers = await GroupUserShare.count({
+                            where: {
+                                group_id: groupJson.id,
+                                status: { [Op.in]: ['accepted', 'active'] }
+                            }
+                        });
+                        
+                        // Calculate pending members
+                        const pendingMembers = totalMembers - addedMembers;
+                        
+                        return {
+                            ...groupJson,
+                            added_members: addedMembers,
+                            pending_members: pendingMembers > 0 ? pendingMembers : 0
+                        };
+                    })
+                );
+
+                return res.json(groupsWithStats);
             } else {
                 // Not authenticated - show all groups (or none, depending on requirement)
                 const groups = await Group.findAll({
@@ -95,7 +120,32 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                     order: [['created_at', 'DESC']]
                 });
 
-                return res.json(groups);
+                // Add member statistics for each group
+                const groupsWithStats = await Promise.all(
+                    groups.map(async (group) => {
+                        const groupJson = group.toJSON ? group.toJSON() : group;
+                        const totalMembers = groupJson.number_of_members || 0;
+                        
+                        // Count added members (accepted or active shares)
+                        const addedMembers = await GroupUserShare.count({
+                            where: {
+                                group_id: groupJson.id,
+                                status: { [Op.in]: ['accepted', 'active'] }
+                            }
+                        });
+                        
+                        // Calculate pending members
+                        const pendingMembers = totalMembers - addedMembers;
+                        
+                        return {
+                            ...groupJson,
+                            added_members: addedMembers,
+                            pending_members: pendingMembers > 0 ? pendingMembers : 0
+                        };
+                    })
+                );
+
+                return res.json(groupsWithStats);
             }
         } catch (error: any) {
             console.error('Error fetching groups:', error);

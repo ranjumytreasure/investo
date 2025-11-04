@@ -1,6 +1,31 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
+import LoadingBar from '../components/LoadingBar'
+
+function BackToHomeButton() {
+    return (
+        <Link
+            to="/home"
+            style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                marginBottom: 16,
+                padding: '8px 12px',
+                background: '#f1f5f9',
+                color: '#1e293b',
+                border: '1px solid #e2e8f0',
+                borderRadius: 8,
+                textDecoration: 'none',
+                fontWeight: 500,
+                fontSize: '0.875rem'
+            }}
+        >
+            ← Back to Home
+        </Link>
+    )
+}
 
 interface FeatureConfig {
     id: string
@@ -156,11 +181,13 @@ export default function AdminFeatures() {
     }
 
     return (
-        <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px' }}>
+        <>
+            {loading && <LoadingBar />}
+            <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px' }}>
+            <BackToHomeButton />
             <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                    <Link to="/home" style={{ textDecoration: 'none', color: '#2563eb', marginBottom: 8, display: 'inline-block' }}>← Back to Home</Link>
-                    <h1 style={{ margin: '8px 0', fontSize: '2rem' }}>Feature Management</h1>
+                    <h1 style={{ margin: '0 0 8px 0', fontSize: '2rem' }}>Feature Management</h1>
                     <p style={{ color: '#64748b', margin: 0 }}>Configure available features and their charges for groups</p>
                 </div>
                 <button
@@ -465,6 +492,7 @@ export default function AdminFeatures() {
                 </div>
             )}
         </div>
+        </>
     )
 }
 

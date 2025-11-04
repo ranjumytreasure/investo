@@ -41,11 +41,13 @@ export default function Login() {
             <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, background: '#ffffff' }}>
                 <h2 style={{ marginTop: 0 }}>Login</h2>
                 {error && <div style={{ color: '#b91c1c', background: '#fee2e2', border: '1px solid #fecaca', padding: 8, borderRadius: 6, marginBottom: 12 }}>{error}</div>}
-                <label style={{ display: 'block', fontWeight: 600 }}>Mobile</label>
-                <input placeholder="e.g. 9876543210" value={phone} onChange={e => setPhone(e.target.value)} style={{ width: '100%', padding: 8 }} />
-                <label style={{ display: 'block', fontWeight: 600, marginTop: 12 }}>PIN</label>
-                <input placeholder="••••" value={pin} onChange={e => setPin(e.target.value)} type="password" inputMode="numeric" maxLength={4} style={{ width: '100%', padding: 8, letterSpacing: 4 }} />
-                <button onClick={login} style={{ marginTop: 12 }}>Login</button>
+                <form onSubmit={(e) => { e.preventDefault(); login(); }}>
+                    <label style={{ display: 'block', fontWeight: 600 }}>Mobile</label>
+                    <input placeholder="e.g. 9876543210" value={phone} onChange={e => setPhone(e.target.value)} style={{ width: '100%', padding: 8 }} />
+                    <label style={{ display: 'block', fontWeight: 600, marginTop: 12 }}>PIN</label>
+                    <input placeholder="••••" value={pin} onChange={e => setPin(e.target.value)} type="password" inputMode="numeric" maxLength={4} style={{ width: '100%', padding: 8, letterSpacing: 4 }} />
+                    <button type="submit" style={{ marginTop: 12, width: '100%' }}>Login</button>
+                </form>
                 <p style={{ marginTop: 12 }}>
                     <Link to="/reset-pin">Forgot PIN?</Link>
                 </p>

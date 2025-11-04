@@ -10,6 +10,7 @@ export default defineConfig({
     proxy: {
       '/auth': 'http://localhost:4000',
       '/admin': 'http://localhost:4000',
+      '/profile': 'http://localhost:4000',
       // Proxy /groups API endpoints - be specific to avoid proxying frontend routes
       '/groups': {
         target: 'http://localhost:4000',

@@ -78,16 +78,28 @@ export function registerAuthRoutes(app: Express, io: SocketIOServer) {
 	});
 
 	app.post('/auth/login', async (req, res) => {
-		const { phone, pin } = req.body as { phone: string; pin: string };
-		const user = await User.findOne({ where: { phone } });
-		if (!user || !user.pin) return res.status(400).json({ error: 'invalid' });
-		if (user.status !== 'active') {
-			return res.status(403).json({ error: 'Account is not active. Please verify your invite via OTP first.' });
+		try {
+			const { phone, pin } = req.body as { phone: string; pin: string };
+			if (!phone || !pin) {
+				return res.status(400).json({ error: 'phone and pin required' });
+			}
+			const user = await User.findOne({ where: { phone } });
+			if (!user || !user.pin) {
+				return res.status(400).json({ error: 'invalid' });
+			}
+			if (user.status !== 'active') {
+				return res.status(403).json({ error: 'Account is not active. Please verify your invite via OTP first.' });
+			}
+			const ok = await bcrypt.compare(pin, user.pin);
+			if (!ok) {
+				return res.status(400).json({ error: 'invalid' });
+			}
+			const token = jwt.sign({ sub: user.id }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
+			return res.json({ token, role: user.role });
+		} catch (err: any) {
+			console.error('Login error:', err);
+			return res.status(500).json({ error: err.message || 'Internal server error' });
 		}
-		const ok = await bcrypt.compare(pin, user.pin);
-		if (!ok) return res.status(400).json({ error: 'invalid' });
-		const token = jwt.sign({ sub: user.id }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
-		return res.json({ token, role: user.role });
 	});
 }
 

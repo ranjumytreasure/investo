@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
+import LoadingBar from '../components/LoadingBar'
 
 // Helper function to decode JWT token and get user ID
 function getUserIdFromToken(token: string | null): string | null {
@@ -257,17 +258,36 @@ export default function GroupDetail() {
 
     if (loading) {
         return (
-            <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px', textAlign: 'center' }}>
-                <p>Loading group details...</p>
-            </div>
+            <>
+                <LoadingBar />
+                <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px', textAlign: 'center' }}>
+                    <p>Loading group details...</p>
+                </div>
+            </>
         )
     }
 
     if (error || !groupDetail) {
         return (
             <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px' }}>
-                <Link to="/home" style={{ textDecoration: 'none', color: '#2563eb', marginBottom: 16, display: 'inline-block' }}>
-                    ← Back to Groups
+                <Link
+                    to="/home"
+                    style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        marginBottom: 16,
+                        padding: '8px 12px',
+                        background: '#f1f5f9',
+                        color: '#1e293b',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 8,
+                        textDecoration: 'none',
+                        fontWeight: 500,
+                        fontSize: '0.875rem'
+                    }}
+                >
+                    ← Back to Home
                 </Link>
                 <div style={{ textAlign: 'center', padding: 40, color: '#dc2626' }}>
                     <p>{error || 'Group not found'}</p>
@@ -324,10 +344,26 @@ export default function GroupDetail() {
     return (
         <div style={{ maxWidth: '1800px', margin: '0 auto', padding: '24px 48px', background: '#f8fafc', minHeight: '100vh' }}>
             {/* Header with Navigation */}
+            <Link
+                to="/home"
+                style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    marginBottom: 16,
+                    padding: '8px 12px',
+                    background: '#f1f5f9',
+                    color: '#1e293b',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 8,
+                    textDecoration: 'none',
+                    fontWeight: 500,
+                    fontSize: '0.875rem'
+                }}
+            >
+                ← Back to Home
+            </Link>
             <div style={{ marginBottom: 24 }}>
-                <Link to="/home" style={{ textDecoration: 'none', color: '#2563eb', display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: '0.875rem' }}>
-                    ← Back to Groups
-                </Link>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: 16 }}>
                     <div style={{ flex: 1 }}>

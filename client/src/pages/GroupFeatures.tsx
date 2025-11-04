@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
+import LoadingBar from '../components/LoadingBar'
 
 interface FeatureConfig {
     id: string
@@ -127,19 +128,38 @@ export default function GroupFeatures() {
 
     if (loading) {
         return (
-            <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px', textAlign: 'center' }}>
-                <p>Loading group features...</p>
-            </div>
+            <>
+                <LoadingBar />
+                <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px', textAlign: 'center' }}>
+                    <p>Loading group features...</p>
+                </div>
+            </>
         )
     }
 
     return (
         <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px' }}>
+            <Link
+                to="/home"
+                style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    marginBottom: 16,
+                    padding: '8px 12px',
+                    background: '#f1f5f9',
+                    color: '#1e293b',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 8,
+                    textDecoration: 'none',
+                    fontWeight: 500,
+                    fontSize: '0.875rem'
+                }}
+            >
+                ← Back to Home
+            </Link>
             <div style={{ marginBottom: 24 }}>
-                <Link to="/home" style={{ textDecoration: 'none', color: '#2563eb', marginBottom: 8, display: 'inline-block' }}>
-                    ← Back to Home
-                </Link>
-                <h1 style={{ margin: '8px 0', fontSize: '2rem' }}>Manage Group Features</h1>
+                <h1 style={{ margin: '0 0 8px 0', fontSize: '2rem' }}>Manage Group Features</h1>
                 <p style={{ color: '#64748b', margin: 0 }}>
                     Add or remove features for this group. Billing charges will be recalculated automatically.
                 </p>

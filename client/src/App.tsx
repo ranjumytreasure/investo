@@ -1,6 +1,7 @@
 import './App.css'
 import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './state/AuthContext'
+import { LanguageProvider } from './state/LanguageContext'
 import Login from './pages/Login'
 import SetPin from './pages/SetPin'
 import Dashboard from './pages/Dashboard'
@@ -19,8 +20,9 @@ import GroupInviteView from './pages/GroupInviteView'
 
 function App() {
   return (
-    <AuthProvider>
-      <Routes>
+    <LanguageProvider>
+      <AuthProvider>
+        <Routes>
         <Route path="/" element={<><Header /><Landing /></>} />
         <Route path="/home" element={<><Header /><div style={{ padding: 16 }}><Home /></div></>} />
         <Route path="/login" element={<><Header /><div style={{ padding: 16 }}><Login /></div></>} />
@@ -36,7 +38,8 @@ function App() {
         <Route path="/groups/:id" element={<><Header /><div style={{ padding: 16 }}><GroupDetail /></div></>} />
         <Route path="/admin/features" element={<><Header /><div style={{ padding: 16 }}><AdminFeatures /></div></>} />
       </Routes>
-    </AuthProvider>
+      </AuthProvider>
+    </LanguageProvider>
   )
 }
 
