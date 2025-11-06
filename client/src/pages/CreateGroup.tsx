@@ -203,7 +203,7 @@ export default function CreateGroup() {
                 name: name.trim(),
                 amount: parseFloat(amount),
                 type: groupType,
-                first_auction_date: firstAuctionDate || null,
+                next_auction_date: firstAuctionDate || null,
                 auction_frequency: auctionFrequency,
                 number_of_members: parseInt(members) || null,
                 features: selectedFeatureIds, // Array of feature IDs

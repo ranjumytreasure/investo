@@ -9,7 +9,7 @@ interface GroupInviteViewData {
         amount: number
         status: string
         type: string
-        first_auction_date: string | null
+        next_auction_date: string | null
         auction_frequency: string | null
         number_of_members: number | null
         billing_charges: number
@@ -233,11 +233,11 @@ export default function GroupInviteView() {
                                 <span style={{ fontWeight: 600, color: '#1e293b' }}>{group.number_of_members}</span>
                             </div>
                         )}
-                        {group.first_auction_date && (
+                        {group.next_auction_date && (
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                <span style={{ color: '#64748b', fontWeight: 500 }}>First Auction Date:</span>
+                                <span style={{ color: '#64748b', fontWeight: 500 }}>Next Auction Date:</span>
                                 <span style={{ fontWeight: 600, color: '#1e293b' }}>
-                                    {new Date(group.first_auction_date).toLocaleDateString()}
+                                    {new Date(group.next_auction_date).toLocaleDateString()}
                                 </span>
                             </div>
                         )}

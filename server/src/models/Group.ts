@@ -7,7 +7,7 @@ export interface GroupAttributes {
     type: string; // 'deductive'
     amount: number;
     status: 'new' | 'inprogress' | 'closed';
-    first_auction_date: Date | null;
+    next_auction_date: Date | null;
     auction_frequency: string | null; // 'weekly' | 'biweekly' | 'monthly'
     number_of_members: number | null;
     billing_charges: number;
@@ -22,7 +22,7 @@ export interface GroupAttributes {
 
 type GroupCreationAttributes = Optional<
     GroupAttributes,
-    'id' | 'status' | 'first_auction_date' | 'auction_frequency' | 'number_of_members' | 'billing_charges' | 'auction_start_at' | 'auction_end_at' | 'referred_by' | 'created_by' | 'updated_by' | 'created_at' | 'updated_at'
+    'id' | 'status' | 'next_auction_date' | 'auction_frequency' | 'number_of_members' | 'billing_charges' | 'auction_start_at' | 'auction_end_at' | 'referred_by' | 'created_by' | 'updated_by' | 'created_at' | 'updated_at'
 >;
 
 export class Group extends Model<GroupAttributes, GroupCreationAttributes> implements GroupAttributes {
@@ -31,7 +31,7 @@ export class Group extends Model<GroupAttributes, GroupCreationAttributes> imple
     type!: string;
     amount!: number;
     status!: 'new' | 'inprogress' | 'closed';
-    first_auction_date!: Date | null;
+    next_auction_date!: Date | null;
     auction_frequency!: string | null;
     number_of_members!: number | null;
     billing_charges!: number;
@@ -51,7 +51,7 @@ Group.init(
         type: { type: DataTypes.STRING, allowNull: false, defaultValue: 'deductive' },
         amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
         status: { type: DataTypes.ENUM('new', 'inprogress', 'closed'), allowNull: false, defaultValue: 'new' },
-        first_auction_date: { type: DataTypes.DATE, allowNull: true },
+        next_auction_date: { type: DataTypes.DATE, allowNull: true },
         auction_frequency: { type: DataTypes.STRING, allowNull: true },
         number_of_members: { type: DataTypes.INTEGER, allowNull: true },
         billing_charges: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },

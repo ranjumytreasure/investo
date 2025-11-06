@@ -79,25 +79,25 @@ export default function Header() {
             top: 0,
             zIndex: 10
         }}>
-            <div style={{ maxWidth: '1800px', margin: '0 auto', padding: '12px 48px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ maxWidth: '1800px', margin: '0 auto', padding: '20px 48px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Link to="/home" style={{ textDecoration: 'none', color: '#111827' }}>
-                    <strong>Investo Pools</strong>
+                    <strong style={{ fontSize: '1.25rem' }}>Investo Pools</strong>
                 </Link>
-                <nav style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <nav style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
                     {/* Language Selector */}
                     <div style={{ position: 'relative' }}>
                         <button
                             onClick={() => setShowLangDropdown(!showLangDropdown)}
                             style={{
-                                padding: '6px 12px',
-                                borderRadius: 6,
+                                padding: '10px 16px',
+                                borderRadius: 8,
                                 border: '1px solid #cbd5e1',
                                 background: '#f8fafc',
                                 cursor: 'pointer',
-                                fontSize: '0.875rem',
+                                fontSize: '0.9375rem',
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: 6
+                                gap: 8
                             }}
                         >
                             <span>🌐</span>
@@ -170,8 +170,39 @@ export default function Header() {
 
                     {!isLoggedIn ? (
                         <>
-                            <Link to="/login">{t('login')}</Link>
-                            <Link to="/signup">{t('signup')}</Link>
+                            <Link 
+                                to="/login" 
+                                style={{
+                                    padding: '10px 16px',
+                                    textDecoration: 'none',
+                                    color: '#374151',
+                                    fontSize: '0.9375rem',
+                                    fontWeight: 500,
+                                    borderRadius: 8,
+                                    transition: 'background-color 0.2s'
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'}
+                                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                            >
+                                {t('login')}
+                            </Link>
+                            <Link 
+                                to="/signup" 
+                                style={{
+                                    padding: '10px 20px',
+                                    textDecoration: 'none',
+                                    color: '#ffffff',
+                                    fontSize: '0.9375rem',
+                                    fontWeight: 500,
+                                    background: '#2563eb',
+                                    borderRadius: 8,
+                                    transition: 'background-color 0.2s'
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = '#1d4ed8'}
+                                onMouseLeave={(e) => e.currentTarget.style.background = '#2563eb'}
+                            >
+                                {t('signup')}
+                            </Link>
                         </>
                     ) : (
                         <>
@@ -179,27 +210,27 @@ export default function Header() {
                                 <Link
                                     to="/admin/features"
                                     style={{
-                                        padding: '6px 12px',
+                                        padding: '10px 16px',
                                         background: '#2563eb',
                                         color: '#fff',
                                         textDecoration: 'none',
-                                        borderRadius: 6,
-                                        fontSize: '0.875rem',
+                                        borderRadius: 8,
+                                        fontSize: '0.9375rem',
                                         fontWeight: 500
                                     }}
                                 >
                                     {t('admin')}
                                 </Link>
                             )}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                                 {state.avatarUrl ? (
-                                    <img src={state.avatarUrl} alt="avatar" style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', border: '1px solid #e5e7eb' }} />
+                                    <img src={state.avatarUrl} alt="avatar" style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover', border: '1px solid #e5e7eb' }} />
                                 ) : (
-                                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#f1f5f9', color: '#0f172a', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
+                                    <div style={{ width: 40, height: 40, borderRadius: '50%', background: '#f1f5f9', color: '#0f172a', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '1rem' }}>
                                         {initials}
                                     </div>
                                 )}
-                                <span style={{ color: '#334155' }}>
+                                <span style={{ color: '#334155', fontSize: '0.9375rem', fontWeight: 500 }}>
                                     {(() => {
                                         console.log('[Header] Rendering name display:', { name: state.name, phone: state.phone })
                                         if (state.name && state.name.trim()) {
@@ -212,7 +243,23 @@ export default function Header() {
                                     })()}
                                 </span>
                             </div>
-                            <button onClick={logout} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f8fafc' }}>{t('logout')}</button>
+                            <button 
+                                onClick={logout} 
+                                style={{ 
+                                    padding: '10px 16px', 
+                                    borderRadius: 8, 
+                                    border: '1px solid #cbd5e1', 
+                                    background: '#f8fafc',
+                                    fontSize: '0.9375rem',
+                                    fontWeight: 500,
+                                    cursor: 'pointer',
+                                    transition: 'background-color 0.2s'
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = '#e2e8f0'}
+                                onMouseLeave={(e) => e.currentTarget.style.background = '#f8fafc'}
+                            >
+                                {t('logout')}
+                            </button>
                         </>
                     )}
                 </nav>

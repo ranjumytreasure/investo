@@ -5,9 +5,10 @@ export default function Landing() {
         <div style={{ minHeight: '100vh', background: 'linear-gradient(to bottom, #f8fafc 0%, #ffffff 100%)' }}>
             {/* Hero Section */}
             <section style={{
-                maxWidth: 1200,
+                maxWidth: '100%',
+                width: '100%',
                 margin: '0 auto',
-                padding: '80px 24px',
+                padding: '80px 48px',
                 textAlign: 'center'
             }}>
                 <h1 style={{
@@ -24,7 +25,7 @@ export default function Landing() {
                 <p style={{
                     fontSize: '1.5rem',
                     color: '#64748b',
-                    maxWidth: 600,
+                    maxWidth: 800,
                     margin: '0 auto 40px',
                     lineHeight: 1.6
                 }}>
@@ -82,8 +83,9 @@ export default function Landing() {
                     gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
                     gap: 24,
                     marginTop: 80,
-                    maxWidth: 1000,
-                    margin: '80px auto 0'
+                    maxWidth: '1400px',
+                    margin: '80px auto 0',
+                    width: '100%'
                 }}>
                     <FeatureCard
                         icon="🔒"
@@ -111,10 +113,10 @@ export default function Landing() {
             {/* How It Works */}
             <section style={{
                 background: '#f8fafc',
-                padding: '80px 24px',
+                padding: '80px 48px',
                 borderTop: '1px solid #e2e8f0'
             }}>
-                <div style={{ maxWidth: 1000, margin: '0 auto' }}>
+                <div style={{ maxWidth: '1400px', margin: '0 auto', width: '100%' }}>
                     <h2 style={{
                         textAlign: 'center',
                         fontSize: '2.5rem',
@@ -154,12 +156,12 @@ export default function Landing() {
 
             {/* CTA Section */}
             <section style={{
-                padding: '80px 24px',
+                padding: '80px 48px',
                 textAlign: 'center',
                 background: 'linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)',
                 color: '#fff'
             }}>
-                <div style={{ maxWidth: 600, margin: '0 auto' }}>
+                <div style={{ maxWidth: '800px', margin: '0 auto', width: '100%' }}>
                     <h2 style={{ fontSize: '2.5rem', marginBottom: 24 }}>
                         Ready to Start Your First Pool?
                     </h2>

@@ -19,14 +19,25 @@ export default defineConfig({
           const url = req.url || ''
           const method = req.method || ''
 
-          // For GET requests, check if it's the frontend /invite route
+          // For GET requests, check if it's a frontend route (invite, auction, features)
+          // BUT: Only bypass if it's a browser navigation (not an API call)
+          // API calls will have Authorization header or Accept: application/json
           if (method === 'GET') {
+            const authHeader = req.headers.authorization || req.headers.Authorization
+            const acceptHeader = req.headers.accept || req.headers.Accept || ''
+            const isApiCall = authHeader || acceptHeader.includes('application/json')
+            
             // Extract path without query string
             const pathname = url.split('?')[0]
-            // Match pattern: /groups/{uuid}/invite (exact, no sub-paths after invite)
-            const inviteRoutePattern = /^\/groups\/[^/]+\/invite$/
+                  // Match patterns for frontend routes:
+                  // /groups/{uuid}/invite
+                  // /groups/{uuid}/auction
+                  // /groups/{uuid}/features
+                  // /groups/{uuid}/Addnew
+                  const frontendRoutePattern = /^\/groups\/[^/]+\/(invite|auction|features|Addnew)$/
 
-            if (inviteRoutePattern.test(pathname)) {
+            // Only bypass if it matches frontend route AND it's NOT an API call
+            if (frontendRoutePattern.test(pathname) && !isApiCall) {
               console.log(`[Vite Proxy] Bypassing proxy for frontend route: ${pathname}`)
               // Return the index.html path - Vite will serve it for SPA routing
               return '/index.html'

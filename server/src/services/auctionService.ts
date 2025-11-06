@@ -6,6 +6,7 @@ import { GroupFeature } from '../models/GroupFeature';
 import { User } from '../models/User';
 import { Auction } from '../models/Auction';
 import { Op } from 'sequelize';
+import { CloseDeductiveMethod } from './auctionClosingMethods';
 
 /**
  * Calculate minimum bid amount (above commission)
@@ -21,8 +22,6 @@ function calculateMinimumBid(groupAmount: number, commission: number): number {
  */
 export async function openAuction(groupId: string, io: SocketIOServer): Promise<void> {
     try {
-        console.log(`🎯 Opening auction for group: ${groupId}`);
-
         // Check if auction already exists and is open
         const existingAccount = await GroupAccount.findOne({
             where: {
@@ -32,14 +31,14 @@ export async function openAuction(groupId: string, io: SocketIOServer): Promise<
         });
 
         if (existingAccount) {
-            console.log(`⚠️ Auction already open for group ${groupId}`);
+            console.log(`⚠️ [Auction Status] Auction already open for group ${groupId}`);
             return;
         }
 
         // Get group details
         const group = await Group.findByPk(groupId);
         if (!group) {
-            console.error(`❌ Group not found: ${groupId}`);
+            console.error(`❌ [Auction Status] Group not found: ${groupId}`);
             return;
         }
 
@@ -64,7 +63,7 @@ export async function openAuction(groupId: string, io: SocketIOServer): Promise<
             winner_share_id: null
         });
 
-        console.log(`✅ Created GroupAccount for auction: ${groupAccount.id}`);
+        console.log(`✅ [Auction Status] Auction opened for group ${groupId} (Account: ${groupAccount.id})`);
 
         // Get all active group members (users with accepted/active shares)
         const shares = await GroupUserShare.findAll({
@@ -75,10 +74,12 @@ export async function openAuction(groupId: string, io: SocketIOServer): Promise<
             }
         });
 
-        // Get user IDs for notifications
-        const userIds = shares
-            .map(share => share.user_id)
-            .filter((id): id is string => id !== null);
+        // Get unique user IDs for notifications (deduplicate in case user has multiple shares)
+        const userIds = Array.from(new Set(
+            shares
+                .map(share => share.user_id)
+                .filter((id): id is string => id !== null)
+        ));
 
         // Broadcast auction opened event to all group members
         const auctionData = {
@@ -90,7 +91,8 @@ export async function openAuction(groupId: string, io: SocketIOServer): Promise<
             group_amount: group.amount,
             auction_start_at: group.auction_start_at ? new Date(group.auction_start_at).toISOString() : null,
             auction_end_at: group.auction_end_at ? new Date(group.auction_end_at).toISOString() : null,
-            opened_at: new Date().toISOString()
+            opened_at: new Date().toISOString(),
+            message: 'Auction has opened'
         };
 
         // Emit to specific room for this group
@@ -104,78 +106,20 @@ export async function openAuction(groupId: string, io: SocketIOServer): Promise<
         // Broadcast globally as well (for users who might be viewing the group)
         io.emit('auction:opened', auctionData);
 
-        console.log(`📢 Notified ${userIds.length} members about auction opening for group ${groupId}`);
+        console.log(`📢 [Auction Status] Notified ${userIds.length} members about auction opening for group ${groupId}`);
 
     } catch (error) {
-        console.error(`❌ Error opening auction for group ${groupId}:`, error);
+        console.error(`❌ [Auction Status] Error opening auction for group ${groupId}:`, error);
         throw error;
     }
 }
 
 /**
  * Close an auction for a group
- * Updates GroupAccount status to "closed" and determines winner
+ * Uses CloseDeductiveMethod for closing logic
  */
 export async function closeAuction(groupId: string, io: SocketIOServer): Promise<void> {
-    try {
-        console.log(`🔒 Closing auction for group: ${groupId}`);
-
-        // Find open auction account
-        const groupAccount = await GroupAccount.findOne({
-            where: {
-                group_id: groupId,
-                status: 'open'
-            }
-        });
-
-        if (!groupAccount) {
-            console.log(`⚠️ No open auction found for group ${groupId}`);
-            return;
-        }
-
-        // Get the winning bid (highest bid)
-        const winningBid = await Auction.findOne({
-            where: {
-                group_account_id: groupAccount.id,
-                is_winning_bid: true
-            },
-            order: [['amount', 'DESC']]
-        });
-
-        if (winningBid) {
-            // Update GroupAccount with winner
-            await groupAccount.update({
-                status: 'closed',
-                winner_share_id: winningBid.group_usershare_id,
-                auction_amount: winningBid.amount
-            });
-
-            console.log(`✅ Auction closed with winner: Share ${winningBid.group_usershare_id}, Amount: ${winningBid.amount}`);
-        } else {
-            // No bids received
-            await groupAccount.update({
-                status: 'closed'
-            });
-            console.log(`⚠️ Auction closed with no bids for group ${groupId}`);
-        }
-
-        // Broadcast auction closed event
-        const auctionData = {
-            group_id: groupId,
-            group_account_id: groupAccount.id,
-            winner_share_id: groupAccount.winner_share_id,
-            winning_amount: groupAccount.auction_amount,
-            closed_at: new Date().toISOString()
-        };
-
-        io.to(`group:${groupId}`).emit('auction:closed', auctionData);
-        io.emit('auction:closed', auctionData);
-
-        console.log(`📢 Notified members about auction closing for group ${groupId}`);
-
-    } catch (error) {
-        console.error(`❌ Error closing auction for group ${groupId}:`, error);
-        throw error;
-    }
+    const closingMethod = new CloseDeductiveMethod();
+    await closingMethod.close(groupId, io);
 }
 

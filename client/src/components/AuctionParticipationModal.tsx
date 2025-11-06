@@ -29,7 +29,7 @@ export default function AuctionParticipationModal({
     }, [socket, groupId])
 
     function handleParticipate() {
-        navigate(`/groups/${groupId}`)
+        navigate(`/groups/${groupId}/auction`)
         onClose()
     }
 

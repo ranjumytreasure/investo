@@ -14,17 +14,7 @@ export function useSocket() {
             reconnectionAttempts: 5
         })
 
-        socket.on('connect', () => {
-            console.log('🔌 Connected to WebSocket server:', socket.id)
-        })
-
-        socket.on('disconnect', () => {
-            console.log('🔌 Disconnected from WebSocket server')
-        })
-
-        socket.on('connect_error', (error) => {
-            console.error('❌ WebSocket connection error:', error)
-        })
+        // Connection events handled silently
 
         socketRef.current = socket
 

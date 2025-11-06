@@ -16,6 +16,7 @@
     "db:migrate-can-invite": "ts-node src/scripts/migrateCanInvite.ts",
     "db:migrate-user-status": "ts-node src/scripts/migrateUserStatus.ts",
     "db:migrate-invite-link": "ts-node src/scripts/migrateInviteLink.ts",
+    "db:migrate-next-auction-date": "ts-node src/scripts/migrateNextAuctionDate.ts",
     "db:seed": "ts-node src/scripts/seedDB.ts",
     "db:seed-features": "ts-node src/scripts/createDefaultFeatures.ts",
     "test": "echo \"Error: no test specified\" && exit 1"

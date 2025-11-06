@@ -11,7 +11,7 @@ interface Group {
     name: string
     amount: number
     status: 'new' | 'inprogress' | 'closed'
-    first_auction_date: string | null
+    next_auction_date: string | null
     auction_frequency: string | null
     number_of_members: number | null
     created_by: string | null
@@ -33,6 +33,7 @@ interface LiveAuction {
     opened_at: string
     auction_start_at: string
     auction_end_at: string
+    message?: string
 }
 
 // Helper function to decode JWT token and get user ID
@@ -200,77 +201,231 @@ export default function Home() {
         }
     }
 
+    // Join user room when socket connects and user is logged in
+    useEffect(() => {
+        if (!socket || !currentUserId) {
+            console.log('[Auction Status] Cannot join user room:', { hasSocket: !!socket, hasUserId: !!currentUserId })
+            return
+        }
+
+        // Join user room so user receives notifications even if they haven't joined group rooms
+        console.log('[Auction Status] Joining user room for user:', currentUserId)
+        socket.emit('auction:join', { 
+            group_id: '', // Empty group_id - just joining user room
+            user_id: currentUserId 
+        })
+    }, [socket, currentUserId])
+
     // Set up WebSocket listeners for auction events
     useEffect(() => {
-        if (!socket) return
+        if (!socket) {
+            console.log('[Auction Status] Socket not available, cannot set up listeners')
+            return
+        }
 
-        socket.on('auction:opened', async (data: LiveAuction) => {
-            console.log('🎯 Auction opened event received:', data)
+        console.log('[Auction Status] Setting up WebSocket listeners for auction events...')
+
+        const handleAuctionOpened = async (data: LiveAuction) => {
+            console.log('[Auction Status] Auction opened event received for group:', data.group_name)
+            console.log('[Auction Status] Event data:', data)
             
-            // Verify auction is actually open by checking the API
-            const token = state.token || localStorage.getItem('token')
-            if (!token) return
-            
-            try {
-                const auctionResponse = await fetch(`/groups/${data.group_id}/auction`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
+            // Update groups to show auction_status as 'open'
+            setAllGroups(prev => {
+                const updated = prev.map(group => {
+                    if (group.id === data.group_id) {
+                        console.log('[Auction Status] Updating allGroups - setting auction_status to open for group:', group.name)
+                        return { ...group, auction_status: 'open' as const }
                     }
+                    return group
                 })
-                
-                if (auctionResponse.ok) {
-                    const auctionData = await auctionResponse.json()
-                    
-                    // Only show modal if auction is actually open
-                    if (auctionData.status === 'open') {
-                        // Check if user is a member of this group
-                        const userGroups = allGroups.filter(g => 
-                            g.id === data.group_id && (
-                                g.created_by === currentUserId ||
-                                // Check if user has shares in this group
-                                true // We'll check this properly when we have share data
-                            )
-                        )
-
-                        if (userGroups.length > 0) {
-                            // Show participation modal
-                            setParticipationModal({
-                                groupId: data.group_id,
-                                groupName: data.group_name,
-                                groupAmount: data.group_amount,
-                                auctionStartAt: data.auction_start_at || auctionData.auction_start_at,
-                                auctionEndAt: data.auction_end_at || auctionData.auction_end_at
+                return [...updated] // New array reference
+            })
+            
+            setGroups(prev => {
+                const updated = prev.map(group => {
+                    if (group.id === data.group_id) {
+                        console.log('[Auction Status] Updating groups - setting auction_status to open for group:', group.name)
+                        return { ...group, auction_status: 'open' as const }
+                    }
+                    return group
+                })
+                return [...updated] // New array reference
+            })
+            
+            // Show browser notification
+            if ('Notification' in window) {
+                if (Notification.permission === 'granted') {
+                    new Notification(`Auction Opened: ${data.group_name}`, {
+                        body: data.message || 'Auction has opened',
+                        icon: '/favicon.ico',
+                        tag: `auction-${data.group_id}` // Prevent duplicate notifications
+                    })
+                } else if (Notification.permission !== 'denied') {
+                    Notification.requestPermission().then(permission => {
+                        if (permission === 'granted') {
+                            new Notification(`Auction Opened: ${data.group_name}`, {
+                                body: data.message || 'Auction has opened',
+                                icon: '/favicon.ico',
+                                tag: `auction-${data.group_id}`
                             })
                         }
-                    } else {
-                        console.log('⚠️ Auction opened event received but auction status is not open:', auctionData.status)
+                    })
+                }
+            }
+            
+            // ALWAYS show modal when auction:opened event is received (WebSocket is reliable)
+            console.log('[Auction Status] Setting participation modal...')
+            setParticipationModal({
+                groupId: data.group_id,
+                groupName: data.group_name || 'Unknown Group',
+                groupAmount: data.group_amount || 0,
+                auctionStartAt: data.auction_start_at || new Date().toISOString(),
+                auctionEndAt: data.auction_end_at || new Date(Date.now() + 3600000).toISOString() // Default 1 hour from now
+            })
+            console.log('[Auction Status] Participation modal set!')
+
+            // Refresh live auctions list
+            fetchLiveAuctions()
+        }
+
+        const handleAuctionWarning = (data: any) => {
+            console.log('[Auction Status] Auction warning event received:', data.message)
+            
+            // Show notification for 5-minute warning
+            if (data.message && data.message.includes('5 minutes')) {
+                // Use browser notification if available, otherwise use alert
+                if ('Notification' in window && Notification.permission === 'granted') {
+                    new Notification(`Auction Ending Soon: ${data.group_name}`, {
+                        body: 'Auction ending in 5 minutes!',
+                        icon: '/favicon.ico'
+                    })
+                } else if ('Notification' in window && Notification.permission !== 'denied') {
+                    Notification.requestPermission().then(permission => {
+                        if (permission === 'granted') {
+                            new Notification(`Auction Ending Soon: ${data.group_name}`, {
+                                body: 'Auction ending in 5 minutes!',
+                                icon: '/favicon.ico'
+                            })
+                        } else {
+                            alert(`⚠️ ${data.group_name}: Auction ending in 5 minutes!`)
+                        }
+                    })
+                } else {
+                    alert(`⚠️ ${data.group_name}: Auction ending in 5 minutes!`)
+                }
+            }
+        }
+
+        const handleAuctionClosed = (data: any) => {
+            console.log('[Auction Status] Auction closed event received for group:', data.group_name)
+            console.log('[Auction Status] Closed event data:', data)
+            
+            // Show browser notification for auction closed
+            if ('Notification' in window) {
+                if (Notification.permission === 'granted') {
+                    new Notification(`Auction Closed: ${data.group_name}`, {
+                        body: data.message || 'Auction has closed',
+                        icon: '/favicon.ico',
+                        tag: `auction-closed-${data.group_id}`
+                    })
+                } else if (Notification.permission !== 'denied') {
+                    Notification.requestPermission().then(permission => {
+                        if (permission === 'granted') {
+                            new Notification(`Auction Closed: ${data.group_name}`, {
+                                body: data.message || 'Auction has closed',
+                                icon: '/favicon.ico',
+                                tag: `auction-closed-${data.group_id}`
+                            })
+                        }
+                    })
+                }
+            }
+            
+            // Close modal - use functional update to access current state
+            setParticipationModal(prev => {
+                if (prev && prev.groupId === data.group_id) {
+                    console.log('[Auction Status] Closing participation modal for closed auction')
+                    return null
+                }
+                return prev
+            })
+            
+            // Remove from live auctions list immediately (optimistic update)
+            setLiveAuctions(prev => {
+                const updated = prev.filter(auction => auction.group_id !== data.group_id)
+                console.log('[Auction Status] Removed auction from live auctions list. Remaining:', updated.length)
+                return updated
+            })
+            
+            // Update both allGroups and groups (displayed list) to reflect closed status
+            setAllGroups(prev => {
+                const updated = prev.map(group => {
+                    if (group.id === data.group_id) {
+                        console.log('[Auction Status] Updating allGroups - setting auction_status to closed for group:', group.name)
+                        return { ...group, auction_status: 'closed' as const }
+                    }
+                    return group
+                })
+                return [...updated] // New array reference to force re-render
+            })
+            
+            // Also update the displayed groups list (create new array to force re-render)
+            setGroups(prev => {
+                const updated = prev.map(group => {
+                    if (group.id === data.group_id) {
+                        console.log('[Auction Status] Updating groups - setting auction_status to closed for group:', group.name)
+                        // Create a completely new object to ensure React detects the change
+                        return { ...group, auction_status: 'closed' as const }
+                    }
+                    return group
+                })
+                // Return new array reference to ensure React detects the change
+                return [...updated]
+            })
+            
+            // Refresh groups and live auctions to get latest data from server
+            setTimeout(() => {
+                fetchLiveAuctions()
+                // Also refresh groups to get updated auction status from server
+                if (isLoggedIn) {
+                    const token = state.token || localStorage.getItem('token')
+                    if (token) {
+                        fetch('/groups', {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        })
+                        .then(res => res.json())
+                        .then(groups => {
+                            console.log('[Auction Status] Refreshed groups from server')
+                            setAllGroups(groups)
+                            // Also update displayed groups if we're on 'all' tab
+                            if (groupTab === 'all') {
+                                setGroups(groups)
+                            } else {
+                                // Filter by current tab
+                                setGroups(groups.filter((g: Group) => g.status === groupTab))
+                            }
+                        })
+                        .catch(() => {
+                            // Silent error
+                        })
                     }
                 }
-            } catch (err) {
-                console.error('Error verifying auction status:', err)
-            }
+            }, 500)
+        }
 
-            // Refresh live auctions list
-            fetchLiveAuctions()
-        })
+        socket.on('auction:opened', handleAuctionOpened)
+        socket.on('auction:warning', handleAuctionWarning)
+        socket.on('auction:closed', handleAuctionClosed)
 
-        socket.on('auction:closed', (data: any) => {
-            console.log('🔒 Auction closed event received:', data)
-            
-            // Close modal if it's for this group
-            if (participationModal && participationModal.groupId === data.group_id) {
-                setParticipationModal(null)
-            }
-            
-            // Refresh live auctions list
-            fetchLiveAuctions()
-        })
+        console.log('[Auction Status] WebSocket listeners registered successfully!')
 
         return () => {
-            socket.off('auction:opened')
-            socket.off('auction:closed')
+            console.log('[Auction Status] Cleaning up WebSocket listeners...')
+            socket.off('auction:opened', handleAuctionOpened)
+            socket.off('auction:warning', handleAuctionWarning)
+            socket.off('auction:closed', handleAuctionClosed)
         }
-    }, [socket, allGroups, currentUserId, state.token, participationModal])
+    }, [socket, currentUserId, state.token])
 
     // Fetch live auctions on mount and when groups change
     useEffect(() => {
@@ -299,12 +454,11 @@ export default function Home() {
                     
                     // Close modal if auction is no longer open
                     if (auctionData.status !== 'open') {
-                        console.log('⚠️ Auction closed, closing modal')
                         setParticipationModal(null)
                     }
                 }
             } catch (err) {
-                console.error('Error checking auction status:', err)
+                // Silent error handling
             }
         }, 30000) // Check every 30 seconds
 
@@ -832,9 +986,13 @@ export default function Home() {
                                         
                                         // List view layout
                                         if (groupView === 'list') {
+                                            // For new groups, navigate to /Addnew, for others to regular detail page
+                                            const groupDetailUrl = group.status === 'new' 
+                                                ? `/groups/${group.id}/Addnew`
+                                                : `/groups/${group.id}`
                                             return (
                                                 <Link
-                                                    to={`/groups/${group.id}`}
+                                                    to={groupDetailUrl}
                                                     key={group.id}
                                                     style={{
                                                         textDecoration: 'none',
@@ -916,11 +1074,11 @@ export default function Home() {
                                                         </div>
 
                                                         {/* First Auction */}
-                                                        {group.first_auction_date && (
+                                                        {group.next_auction_date && (
                                                             <div style={{ flex: '0 0 120px', textAlign: 'right' }}>
-                                                                <div style={{ color: '#64748b', fontSize: '0.75rem', marginBottom: 2 }}>First Auction</div>
+                                                                <div style={{ color: '#64748b', fontSize: '0.75rem', marginBottom: 2 }}>Next Auction</div>
                                                                 <div style={{ color: '#1e293b', fontSize: '0.875rem', fontWeight: 600 }}>
-                                                                    {new Date(group.first_auction_date).toLocaleDateString()}
+                                                                    {new Date(group.next_auction_date).toLocaleDateString()}
                                                                 </div>
                                                             </div>
                                                         )}
@@ -977,74 +1135,128 @@ export default function Home() {
                                                             {isLoggedIn && (
                                                                 <>
                                                                     {group.status === 'inprogress' ? (
-                                                                        <Link
-                                                                            to={`/groups/${group.id}`}
-                                                                            style={{
-                                                                                padding: '8px 16px',
-                                                                                fontSize: '0.75rem',
-                                                                                background: group.auction_status === 'open' 
-                                                                                    ? 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)'
-                                                                                    : '#2563eb',
-                                                                                color: '#fff',
-                                                                                borderRadius: 6,
-                                                                                textDecoration: 'none',
-                                                                                fontWeight: 700,
-                                                                                whiteSpace: 'nowrap',
-                                                                                boxShadow: group.auction_status === 'open' 
-                                                                                    ? '0 4px 12px rgba(37, 99, 235, 0.4)'
-                                                                                    : '0 2px 4px rgba(0, 0, 0, 0.1)',
-                                                                                animation: group.auction_status === 'open' 
-                                                                                    ? 'live-auction-button-pulse 2s infinite' 
-                                                                                    : 'none',
-                                                                                transition: 'all 0.2s'
-                                                                            }}
-                                                                            onClick={(e) => e.stopPropagation()}
-                                                                            onMouseEnter={(e) => {
-                                                                                e.currentTarget.style.transform = 'translateY(-2px)'
-                                                                                e.currentTarget.style.boxShadow = '0 6px 16px rgba(37, 99, 235, 0.5)'
-                                                                            }}
-                                                                            onMouseLeave={(e) => {
-                                                                                e.currentTarget.style.transform = 'translateY(0)'
-                                                                                e.currentTarget.style.boxShadow = group.auction_status === 'open' 
-                                                                                    ? '0 4px 12px rgba(37, 99, 235, 0.4)'
-                                                                                    : '0 2px 4px rgba(0, 0, 0, 0.1)'
-                                                                            }}
-                                                                        >
-                                                                            {group.auction_status === 'open' ? '🚀 Participate' : 'View'}
-                                                                        </Link>
-                                                                    ) : group.status === 'new' ? (
-                                                                        // For new groups, only show "Add X members" button if there are pending members
-                                                                        pendingMembers > 0 ? (
+                                                                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                                                            {/* View Group Accounts Button */}
                                                                             <Link
                                                                                 to={`/groups/${group.id}`}
-                                                                                className="pending-members-button"
                                                                                 style={{
-                                                                                    display: 'inline-block',
                                                                                     padding: '8px 16px',
                                                                                     fontSize: '0.75rem',
-                                                                                    background: '#10b981',
+                                                                                    background: '#2563eb',
                                                                                     color: '#fff',
-                                                                                    borderRadius: 8,
+                                                                                    borderRadius: 6,
                                                                                     textDecoration: 'none',
-                                                                                    textAlign: 'center',
-                                                                                    fontWeight: 600,
-                                                                                    border: '1px solid #059669',
-                                                                                    transition: 'all 0.2s',
-                                                                                    whiteSpace: 'nowrap'
+                                                                                    fontWeight: 700,
+                                                                                    whiteSpace: 'nowrap',
+                                                                                    boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+                                                                                    transition: 'all 0.2s'
                                                                                 }}
                                                                                 onClick={(e) => e.stopPropagation()}
                                                                                 onMouseEnter={(e) => {
-                                                                                    e.currentTarget.style.background = '#059669'
-                                                                                    e.currentTarget.style.animation = 'none'
+                                                                                    e.currentTarget.style.transform = 'translateY(-2px)'
+                                                                                    e.currentTarget.style.boxShadow = '0 4px 8px rgba(37, 99, 235, 0.3)'
                                                                                 }}
                                                                                 onMouseLeave={(e) => {
-                                                                                    e.currentTarget.style.background = '#10b981'
-                                                                                    e.currentTarget.style.animation = 'pulse-glow-bounce 2.5s ease-in-out infinite'
+                                                                                    e.currentTarget.style.transform = 'translateY(0)'
+                                                                                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1)'
                                                                                 }}
                                                                             >
-                                                                                Add {pendingMembers} member{pendingMembers !== 1 ? 's' : ''}
+                                                                                View Group Accounts
                                                                             </Link>
-                                                                        ) : null
+                                                                            {/* Auction Status Button */}
+                                                                            {group.auction_status === 'open' ? (
+                                                                                <Link
+                                                                                    to={`/groups/${group.id}/auction`}
+                                                                                    style={{
+                                                                                        padding: '8px 16px',
+                                                                                        fontSize: '0.75rem',
+                                                                                        background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                                                                        color: '#fff',
+                                                                                        borderRadius: 6,
+                                                                                        textDecoration: 'none',
+                                                                                        fontWeight: 700,
+                                                                                        whiteSpace: 'nowrap',
+                                                                                        boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4)',
+                                                                                        animation: 'live-auction-button-pulse 2s infinite',
+                                                                                        transition: 'all 0.2s'
+                                                                                    }}
+                                                                                    onClick={(e) => e.stopPropagation()}
+                                                                                    onMouseEnter={(e) => {
+                                                                                        e.currentTarget.style.transform = 'translateY(-2px)'
+                                                                                        e.currentTarget.style.boxShadow = '0 6px 16px rgba(16, 185, 129, 0.5)'
+                                                                                    }}
+                                                                                    onMouseLeave={(e) => {
+                                                                                        e.currentTarget.style.transform = 'translateY(0)'
+                                                                                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.4)'
+                                                                                    }}
+                                                                                >
+                                                                                    🔴 Auction Open
+                                                                                </Link>
+                                                                            ) : group.auction_status === 'closed' ? (
+                                                                                <div
+                                                                                    style={{
+                                                                                        padding: '8px 16px',
+                                                                                        fontSize: '0.75rem',
+                                                                                        background: '#fee2e2',
+                                                                                        color: '#dc2626',
+                                                                                        borderRadius: 6,
+                                                                                        fontWeight: 700,
+                                                                                        whiteSpace: 'nowrap',
+                                                                                        border: '1px solid #dc2626'
+                                                                                    }}
+                                                                                >
+                                                                                    Auction Closed
+                                                                                </div>
+                                                                            ) : (
+                                                                                <div
+                                                                                    style={{
+                                                                                        padding: '8px 16px',
+                                                                                        fontSize: '0.75rem',
+                                                                                        background: '#f1f5f9',
+                                                                                        color: '#64748b',
+                                                                                        borderRadius: 6,
+                                                                                        fontWeight: 700,
+                                                                                        whiteSpace: 'nowrap',
+                                                                                        border: '1px solid #e2e8f0'
+                                                                                    }}
+                                                                                >
+                                                                                    No Auction
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    ) : group.status === 'new' ? (
+                                                                        // For new groups, always show "Add members" button
+                                                                        <Link
+                                                                            to={`/groups/${group.id}/Addnew`}
+                                                                            className="pending-members-button"
+                                                                            style={{
+                                                                                display: 'inline-block',
+                                                                                padding: '8px 16px',
+                                                                                fontSize: '0.75rem',
+                                                                                background: '#10b981',
+                                                                                color: '#fff',
+                                                                                borderRadius: 8,
+                                                                                textDecoration: 'none',
+                                                                                textAlign: 'center',
+                                                                                fontWeight: 600,
+                                                                                border: '1px solid #059669',
+                                                                                transition: 'all 0.2s',
+                                                                                whiteSpace: 'nowrap'
+                                                                            }}
+                                                                            onClick={(e) => e.stopPropagation()}
+                                                                            onMouseEnter={(e) => {
+                                                                                e.currentTarget.style.background = '#059669'
+                                                                                e.currentTarget.style.animation = 'none'
+                                                                            }}
+                                                                            onMouseLeave={(e) => {
+                                                                                e.currentTarget.style.background = '#10b981'
+                                                                                e.currentTarget.style.animation = 'pulse-glow-bounce 2.5s ease-in-out infinite'
+                                                                            }}
+                                                                        >
+                                                                            {pendingMembers > 0 
+                                                                                ? `Add ${pendingMembers} member${pendingMembers !== 1 ? 's' : ''}`
+                                                                                : 'Add Members'}
+                                                                        </Link>
                                                                     ) : (
                                                                         // For closed groups, show Manage Features and Delete (if creator)
                                                                         <>
@@ -1098,9 +1310,13 @@ export default function Home() {
                                         }
                                         
                                         // Card view layout (existing)
+                                        // For new groups, navigate to /Addnew, for others to regular detail page
+                                        const groupDetailUrl = group.status === 'new' 
+                                            ? `/groups/${group.id}/Addnew`
+                                            : `/groups/${group.id}`
                                         return (
                                             <Link
-                                                to={`/groups/${group.id}`}
+                                                to={groupDetailUrl}
                                                 key={group.id}
                                                 style={{
                                                     textDecoration: 'none',
@@ -1179,11 +1395,11 @@ export default function Home() {
                                                         <span style={{ color: '#64748b' }}>Members: </span>
                                                         <span style={{ fontWeight: 600, color: '#1e293b' }}>{group.number_of_members || 0}</span>
                                                     </div>
-                                                    {group.first_auction_date && (
+                                                    {group.next_auction_date && (
                                                         <div style={{ fontSize: '0.875rem' }}>
-                                                            <span style={{ color: '#64748b' }}>First Auction: </span>
+                                                            <span style={{ color: '#64748b' }}>Next Auction: </span>
                                                             <span style={{ fontWeight: 600, color: '#1e293b' }}>
-                                                                {new Date(group.first_auction_date).toLocaleDateString('en-US', {
+                                                                {new Date(group.next_auction_date).toLocaleDateString('en-US', {
                                                                     month: 'short',
                                                                     day: 'numeric'
                                                                 })}
@@ -1195,36 +1411,69 @@ export default function Home() {
                                                 {/* Auction Status and View Button for inprogress groups */}
                                                 {group.status === 'inprogress' ? (
                                                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                                        {/* Auction Status */}
+                                                        {/* View Group Accounts Button */}
+                                                        <Link
+                                                            to={`/groups/${group.id}`}
+                                                            style={{
+                                                                width: '100%',
+                                                                padding: '10px 16px',
+                                                                background: '#2563eb',
+                                                                color: '#fff',
+                                                                borderRadius: 8,
+                                                                textAlign: 'center',
+                                                                textDecoration: 'none',
+                                                                fontSize: '0.875rem',
+                                                                fontWeight: 700,
+                                                                transition: 'all 0.2s',
+                                                                boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)'
+                                                            }}
+                                                            onMouseEnter={(e) => {
+                                                                e.currentTarget.style.background = '#1e40af'
+                                                                e.currentTarget.style.transform = 'translateY(-2px)'
+                                                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(37, 99, 235, 0.3)'
+                                                            }}
+                                                            onMouseLeave={(e) => {
+                                                                e.currentTarget.style.background = '#2563eb'
+                                                                e.currentTarget.style.transform = 'translateY(0)'
+                                                                e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1)'
+                                                            }}
+                                                        >
+                                                            View Group Accounts
+                                                        </Link>
+                                                        
+                                                        {/* Auction Status Button */}
                                                         {group.auction_status === 'open' ? (
-                                                            <div
-                                                                className="live-auction-open"
+                                                            <Link
+                                                                to={`/groups/${group.id}/auction`}
                                                                 style={{
+                                                                    width: '100%',
                                                                     padding: '10px 16px',
                                                                     background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
                                                                     color: '#fff',
                                                                     borderRadius: 8,
                                                                     textAlign: 'center',
+                                                                    textDecoration: 'none',
                                                                     fontSize: '0.875rem',
                                                                     fontWeight: 700,
                                                                     boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4)',
-                                                                    position: 'relative',
-                                                                    overflow: 'hidden',
-                                                                    animation: 'live-auction-pulse 2s infinite'
+                                                                    animation: 'live-auction-button-pulse 2s infinite',
+                                                                    transition: 'all 0.2s'
+                                                                }}
+                                                                onMouseEnter={(e) => {
+                                                                    e.currentTarget.style.transform = 'translateY(-2px)'
+                                                                    e.currentTarget.style.boxShadow = '0 6px 16px rgba(16, 185, 129, 0.5)'
+                                                                }}
+                                                                onMouseLeave={(e) => {
+                                                                    e.currentTarget.style.transform = 'translateY(0)'
+                                                                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.4)'
                                                                 }}
                                                             >
-                                                                <span style={{ 
-                                                                    display: 'inline-block',
-                                                                    animation: 'live-auction-blink 1.5s infinite',
-                                                                    marginRight: 8
-                                                                }}>🔴</span>
-                                                                <span style={{ animation: 'live-auction-text-glow 2s infinite' }}>
-                                                                    LIVE AUCTION OPEN
-                                                                </span>
-                                                            </div>
+                                                                🔴 Auction Open
+                                                            </Link>
                                                         ) : group.auction_status === 'closed' ? (
                                                             <div
                                                                 style={{
+                                                                    width: '100%',
                                                                     padding: '10px 16px',
                                                                     background: '#fee2e2',
                                                                     color: '#dc2626',
@@ -1235,73 +1484,48 @@ export default function Home() {
                                                                     border: '2px solid #dc2626'
                                                                 }}
                                                             >
-                                                                Live Auction Closed
+                                                                Auction Closed
                                                             </div>
-                                                        ) : null}
-                                                        
-                                                        {/* View Button */}
-                                                        <Link
-                                                            to={`/groups/${group.id}`}
-                                                            style={{
-                                                                width: '100%',
-                                                                padding: '10px 16px',
-                                                                background: group.auction_status === 'open' 
-                                                                    ? 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)'
-                                                                    : '#2563eb',
-                                                                color: '#fff',
-                                                                borderRadius: 8,
-                                                                textAlign: 'center',
-                                                                textDecoration: 'none',
-                                                                fontSize: '0.875rem',
-                                                                fontWeight: 700,
-                                                                transition: 'all 0.2s',
-                                                                boxShadow: group.auction_status === 'open' 
-                                                                    ? '0 4px 12px rgba(37, 99, 235, 0.4)'
-                                                                    : '0 2px 4px rgba(0, 0, 0, 0.1)',
-                                                                animation: group.auction_status === 'open' 
-                                                                    ? 'live-auction-button-pulse 2s infinite' 
-                                                                    : 'none'
-                                                            }}
-                                                            onMouseEnter={(e) => {
-                                                                e.currentTarget.style.background = '#1e40af'
-                                                                e.currentTarget.style.transform = 'translateY(-2px)'
-                                                                e.currentTarget.style.boxShadow = '0 6px 16px rgba(37, 99, 235, 0.5)'
-                                                            }}
-                                                            onMouseLeave={(e) => {
-                                                                e.currentTarget.style.background = group.auction_status === 'open' 
-                                                                    ? 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)'
-                                                                    : '#2563eb'
-                                                                e.currentTarget.style.transform = 'translateY(0)'
-                                                                e.currentTarget.style.boxShadow = group.auction_status === 'open' 
-                                                                    ? '0 4px 12px rgba(37, 99, 235, 0.4)'
-                                                                    : '0 2px 4px rgba(0, 0, 0, 0.1)'
-                                                            }}
-                                                        >
-                                                            {group.auction_status === 'open' ? '🚀 Participate Now' : 'View'}
-                                                        </Link>
+                                                        ) : (
+                                                            <div
+                                                                style={{
+                                                                    width: '100%',
+                                                                    padding: '10px 16px',
+                                                                    background: '#f1f5f9',
+                                                                    color: '#64748b',
+                                                                    borderRadius: 8,
+                                                                    textAlign: 'center',
+                                                                    fontSize: '0.875rem',
+                                                                    fontWeight: 700,
+                                                                    border: '1px solid #e2e8f0'
+                                                                }}
+                                                            >
+                                                                No Auction
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 ) : group.status === 'new' ? (
-                                                    // For new groups, only show "Add X members" button if there are pending members
-                                                    pendingMembers > 0 ? (
-                                                        <button
-                                                            onClick={() => navigate(`/groups/${group.id}`)}
-                                                            className="pending-members-button"
-                                                            style={{
-                                                                width: '100%',
-                                                                padding: '10px 16px',
-                                                                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                                                                color: '#fff',
-                                                                border: 'none',
-                                                                borderRadius: 8,
-                                                                fontSize: '0.875rem',
-                                                                fontWeight: 700,
-                                                                cursor: 'pointer',
-                                                                boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
-                                                            }}
-                                                        >
-                                                            Add {pendingMembers} member{pendingMembers !== 1 ? 's' : ''}
-                                                        </button>
-                                                    ) : null
+                                                    // For new groups, always show "Add members" button
+                                                    <button
+                                                        onClick={() => navigate(`/groups/${group.id}/Addnew`)}
+                                                        className="pending-members-button"
+                                                        style={{
+                                                            width: '100%',
+                                                            padding: '10px 16px',
+                                                            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                                            color: '#fff',
+                                                            border: 'none',
+                                                            borderRadius: 8,
+                                                            fontSize: '0.875rem',
+                                                            fontWeight: 700,
+                                                            cursor: 'pointer',
+                                                            boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
+                                                        }}
+                                                    >
+                                                        {pendingMembers > 0 
+                                                            ? `Add ${pendingMembers} member${pendingMembers !== 1 ? 's' : ''}`
+                                                            : 'Add Members'}
+                                                    </button>
                                                 ) : (
                                                     // For closed groups, show View and Details buttons
                                                     <div style={{ display: 'flex', gap: 8 }}>

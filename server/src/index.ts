@@ -32,18 +32,16 @@ const server = http.createServer(app);
 const io = new SocketIOServer(server, { cors: { origin: '*' } });
 
 io.on('connection', (socket) => {
-    console.log('🔌 Socket connected:', socket.id);
-
     // Join group room when user subscribes to a group's auction
     socket.on('auction:join', (data: { group_id: string, user_id?: string }) => {
+        // Join group room if group_id is provided
         if (data.group_id) {
             socket.join(`group:${data.group_id}`);
-            console.log(`👤 User ${socket.id} joined group room: group:${data.group_id}`);
-            
-            if (data.user_id) {
-                socket.join(`user:${data.user_id}`);
-                console.log(`👤 User ${socket.id} joined user room: user:${data.user_id}`);
-            }
+        }
+        
+        // Join user room if user_id is provided (can be done independently)
+        if (data.user_id) {
+            socket.join(`user:${data.user_id}`);
         }
     });
 
@@ -51,12 +49,7 @@ io.on('connection', (socket) => {
     socket.on('auction:leave', (data: { group_id: string }) => {
         if (data.group_id) {
             socket.leave(`group:${data.group_id}`);
-            console.log(`👤 User ${socket.id} left group room: group:${data.group_id}`);
         }
-    });
-
-    socket.on('disconnect', () => {
-        console.log('🔌 Socket disconnected:', socket.id);
     });
 });
 
@@ -67,7 +60,8 @@ registerGroupRoutes(app, io);
 registerAdminRoutes(app);
 registerProfileRoutes(app);
 
-startAuctionCron(io);
+// Cron job disabled - uncomment to enable
+// startAuctionCron(io);
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4000;
 

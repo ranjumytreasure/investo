@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link, useParams, useNavigate } from 'react-router-dom'
+import { Link, useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
 import LoadingBar from '../components/LoadingBar'
 import Auction from '../components/Auction'
@@ -28,7 +28,7 @@ interface GroupDetail {
         amount: number
         status: 'new' | 'inprogress' | 'closed'
         type: string
-        first_auction_date: string | null
+        next_auction_date: string | null
         auction_frequency: string | null
         number_of_members: number | null
         billing_charges: number
@@ -83,11 +83,13 @@ interface GroupDetail {
 export default function GroupDetail() {
     const { id } = useParams<{ id: string }>()
     const navigate = useNavigate()
+    const location = useLocation()
     const { state } = useAuth()
     const [groupDetail, setGroupDetail] = useState<GroupDetail | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
-    const [showInviteForm, setShowInviteForm] = useState(false)
+    const isAddMemberRoute = location.pathname.includes('/Addnew')
+    const [showInviteForm, setShowInviteForm] = useState(isAddMemberRoute)
     const [invitePhone, setInvitePhone] = useState('')
     const [inviteName, setInviteName] = useState('')
     const [inviteSharePercent, setInviteSharePercent] = useState('')
@@ -114,6 +116,14 @@ export default function GroupDetail() {
             fetchAccountDetails()
         }
     }, [id, groupDetail?.group?.status])
+
+    // Redirect if on /Addnew route but group is not 'new'
+    useEffect(() => {
+        if (isAddMemberRoute && groupDetail && groupDetail.group.status !== 'new') {
+            console.log('[GroupDetail] Redirecting from /Addnew - group is not new, status:', groupDetail.group.status)
+            navigate(`/groups/${id}`, { replace: true })
+        }
+    }, [isAddMemberRoute, groupDetail, id, navigate])
 
     async function fetchGroupDetail() {
         setLoading(true)
@@ -178,7 +188,7 @@ export default function GroupDetail() {
         setEditAuctionError(null)
 
         const formData = new FormData(e.currentTarget)
-        const firstAuctionDate = formData.get('first_auction_date') as string
+        const nextAuctionDate = formData.get('next_auction_date') as string
         const auctionStartDate = formData.get('auction_start_date') as string
         const auctionStartTime = formData.get('auction_start_time') as string
         const auctionEndDate = formData.get('auction_end_date') as string
@@ -187,16 +197,16 @@ export default function GroupDetail() {
         try {
             const updatePayload: any = {}
             
-            if (firstAuctionDate) {
-                updatePayload.first_auction_date = new Date(firstAuctionDate).toISOString()
+            if (nextAuctionDate) {
+                updatePayload.next_auction_date = new Date(nextAuctionDate).toISOString()
             }
             
             // Handle auction start date and time
             if (auctionStartDate || auctionStartTime) {
-                // Use provided date, or fallback to existing start date, or first_auction_date
+                // Use provided date, or fallback to existing start date, or next_auction_date
                 const dateToUse = auctionStartDate || 
                     (groupDetail.group.auction_start_at ? new Date(groupDetail.group.auction_start_at).toISOString().split('T')[0] : null) ||
-                    (firstAuctionDate || (groupDetail.group.first_auction_date ? new Date(groupDetail.group.first_auction_date).toISOString().split('T')[0] : null))
+                    (nextAuctionDate || (groupDetail.group.next_auction_date ? new Date(groupDetail.group.next_auction_date).toISOString().split('T')[0] : null))
                 
                 // Use provided time, or fallback to existing start time, or default to 00:00
                 const timeToUse = auctionStartTime || 
@@ -210,12 +220,12 @@ export default function GroupDetail() {
             
             // Handle auction end date and time
             if (auctionEndDate || auctionEndTime) {
-                // Use provided date, or fallback to existing end date, or start date, or first_auction_date
+                // Use provided date, or fallback to existing end date, or start date, or next_auction_date
                 const dateToUse = auctionEndDate || 
                     (groupDetail.group.auction_end_at ? new Date(groupDetail.group.auction_end_at).toISOString().split('T')[0] : null) ||
                     (updatePayload.auction_start_at ? new Date(updatePayload.auction_start_at).toISOString().split('T')[0] : null) ||
                     (groupDetail.group.auction_start_at ? new Date(groupDetail.group.auction_start_at).toISOString().split('T')[0] : null) ||
-                    (firstAuctionDate || (groupDetail.group.first_auction_date ? new Date(groupDetail.group.first_auction_date).toISOString().split('T')[0] : null))
+                    (nextAuctionDate || (groupDetail.group.next_auction_date ? new Date(groupDetail.group.next_auction_date).toISOString().split('T')[0] : null))
                 
                 // Use provided time, or fallback to existing end time, or default to 23:59
                 const timeToUse = auctionEndTime || 
@@ -677,12 +687,12 @@ export default function GroupDetail() {
                                 <span style={{ fontWeight: 600, color: '#1e293b' }}>{group.number_of_members}</span>
                             </div>
                         )}
-                        {group.first_auction_date && (
+                        {group.next_auction_date && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.875rem' }}>
-                                <span style={{ color: '#64748b' }}>First Auction:</span>
+                                <span style={{ color: '#64748b' }}>Next Auction:</span>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                     <span style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.8rem' }}>
-                                        {new Date(group.first_auction_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                        {new Date(group.next_auction_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                                     </span>
                                     {group.created_by === getUserIdFromToken(state.token) && (
                                         <button
@@ -997,21 +1007,24 @@ export default function GroupDetail() {
                 </div>
             )}
 
-            {/* Auction Component */}
-            {groupDetail && (
-                <Auction
-                    groupId={group.id}
-                    userShares={groupDetail.shares.map(share => ({
-                        id: share.id,
-                        share_no: share.share_no,
-                        share_percent: share.share_percent,
-                        status: share.status,
-                        user_id: share.user?.id || null
-                    }))}
-                />
+            {/* Auction Component - Show at top when auction is open, but NOT on /Addnew route */}
+            {groupDetail && !isAddMemberRoute && (
+                <div style={{ marginBottom: 24 }}>
+                    <Auction
+                        groupId={group.id}
+                        userShares={groupDetail.shares.map(share => ({
+                            id: share.id,
+                            share_no: share.share_no,
+                            share_percent: share.share_percent,
+                            status: share.status,
+                            user_id: share.user?.id || null
+                        }))}
+                    />
+                </div>
             )}
 
             {/* For New Groups - Add New Users - PRIMARY FOCUS */}
+            {/* Show focused invite UI when on /add-member route, or show full detail when not */}
             {group.status === 'new' && (
                 <>
                     {/* Invite Form - Prominent Section */}
@@ -1026,10 +1039,12 @@ export default function GroupDetail() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                             <div>
                                 <h2 style={{ margin: '0 0 8px 0', fontSize: '1.5rem', fontWeight: 700, color: '#1e293b' }}>
-                                    Add New Users
+                                    {isAddMemberRoute ? 'Add New Members' : 'Add New Users'}
                                 </h2>
                                 <p style={{ margin: 0, fontSize: '0.875rem', color: '#64748b' }}>
-                                    Invite users to join this group and allocate shares
+                                    {isAddMemberRoute 
+                                        ? 'Invite members to join this group and complete your group setup'
+                                        : 'Invite users to join this group and allocate shares'}
                                 </p>
                             </div>
                             {availableShareNumbers.length === 0 && (
@@ -1990,12 +2005,12 @@ export default function GroupDetail() {
                             <form onSubmit={handleUpdateAuction}>
                                 <div style={{ marginBottom: 16 }}>
                                     <label style={{ display: 'block', marginBottom: 6, fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
-                                        First Auction Date
+                                        Next Auction Date
                                     </label>
                                     <input
                                         type="date"
-                                        name="first_auction_date"
-                                        defaultValue={groupDetail.group.first_auction_date ? new Date(groupDetail.group.first_auction_date).toISOString().split('T')[0] : ''}
+                                        name="next_auction_date"
+                                        defaultValue={groupDetail.group.next_auction_date ? new Date(groupDetail.group.next_auction_date).toISOString().split('T')[0] : ''}
                                         required
                                         style={{
                                             width: '100%',
