@@ -2,8 +2,15 @@ import { Express } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { User } from '../models/User';
 import { UserAddress } from '../models/Address';
+import path from 'path';
+import fs from 'fs';
+
+const kycUploadDir = path.join(__dirname, '../../uploads/kyc');
 
 export function registerProfileRoutes(app: Express) {
+    // Ensure upload directory exists
+    fs.mkdirSync(kycUploadDir, { recursive: true });
+
     // Get current user profile
     app.get('/profile', authenticateToken, async (req: AuthRequest, res) => {
         try {
@@ -32,6 +39,39 @@ export function registerProfileRoutes(app: Express) {
         } catch (error: any) {
             console.error('Error fetching profile:', error);
             return res.status(500).json({ message: error.message || 'Failed to fetch profile' });
+        }
+    });
+
+    app.post('/verify/kyc', authenticateToken, async (req: AuthRequest, res) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: 'User not authenticated' });
+            }
+
+            const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
+
+            if (!fileBase64) {
+                return res.status(400).json({ message: 'fileBase64 is required' });
+            }
+
+            const buffer = Buffer.from(fileBase64.replace(/^data:.*;base64,/, ''), 'base64');
+            const sanitizedName = (fileName || 'aadhaar').replace(/[^a-z0-9.\-]/gi, '_');
+            const filePath = path.join(kycUploadDir, `${req.user.id}-${Date.now()}-${sanitizedName}`);
+
+            await fs.promises.writeFile(filePath, buffer);
+
+            req.user.kyc_verified = true;
+            req.user.updated_by = req.user.id;
+            req.user.updated_at = new Date();
+            await req.user.save();
+
+            return res.json({
+                message: 'KYC verification completed (auto-approved for beta)',
+                path: path.relative(path.join(__dirname, '../../'), filePath)
+            });
+        } catch (error: any) {
+            console.error('Error processing KYC verification:', error);
+            return res.status(500).json({ message: error.message || 'Failed to complete verification' });
         }
     });
 

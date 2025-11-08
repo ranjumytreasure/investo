@@ -4,23 +4,25 @@ import { sequelize } from '../lib/sequelize';
 export interface ReceivableAttributes {
     id: string;
     group_id: string;
+    group_account_id: string | null;
     user_id: string;
     group_share_id: string | null;
-    expected_amount: number;
+    due_amount: number;
     due_date: Date | null;
     status: string; // pending, paid, overdue
 }
 
-export class Receivable extends Model<ReceivableAttributes, Optional<ReceivableAttributes, 'id' | 'group_share_id' | 'due_date' | 'status'>> implements ReceivableAttributes {
-    id!: string; group_id!: string; user_id!: string; group_share_id!: string | null; expected_amount!: number; due_date!: Date | null; status!: string;
+export class Receivable extends Model<ReceivableAttributes, Optional<ReceivableAttributes, 'id' | 'group_account_id' | 'group_share_id' | 'due_date' | 'status'>> implements ReceivableAttributes {
+    id!: string; group_id!: string; group_account_id!: string | null; user_id!: string; group_share_id!: string | null; due_amount!: number; due_date!: Date | null; status!: string;
 }
 
 Receivable.init({
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
     group_id: { type: DataTypes.UUID, allowNull: false },
+    group_account_id: { type: DataTypes.UUID, allowNull: true },
     user_id: { type: DataTypes.UUID, allowNull: false },
     group_share_id: { type: DataTypes.UUID, allowNull: true },
-    expected_amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
+    due_amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
     due_date: { type: DataTypes.DATE, allowNull: true },
     status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'pending' }
 }, { sequelize, tableName: 'receivables', timestamps: false });
@@ -64,10 +66,30 @@ Payable.init({
     amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false }
 }, { sequelize, tableName: 'payables', timestamps: false });
 
-export interface PaymentAttributes { id: string; payable_id: string; group_id: string; user_id: string; amount: number; }
+export interface PaymentAttributes { 
+    id: string; 
+    payable_id: string; 
+    group_id: string; 
+    user_id: string; 
+    amount: number;
+    payment_method_id: string | null;
+    status: string; // pending, processing, completed, failed
+    transaction_id: string | null;
+    failure_reason: string | null;
+    processed_at: Date | null;
+}
 
-export class Payment extends Model<PaymentAttributes, Optional<PaymentAttributes, 'id'>> implements PaymentAttributes {
-    id!: string; payable_id!: string; group_id!: string; user_id!: string; amount!: number;
+export class Payment extends Model<PaymentAttributes, Optional<PaymentAttributes, 'id' | 'payment_method_id' | 'status' | 'transaction_id' | 'failure_reason' | 'processed_at'>> implements PaymentAttributes {
+    id!: string; 
+    payable_id!: string; 
+    group_id!: string; 
+    user_id!: string; 
+    amount!: number;
+    payment_method_id!: string | null;
+    status!: string;
+    transaction_id!: string | null;
+    failure_reason!: string | null;
+    processed_at!: Date | null;
 }
 
 Payment.init({
@@ -75,7 +97,12 @@ Payment.init({
     payable_id: { type: DataTypes.UUID, allowNull: false },
     group_id: { type: DataTypes.UUID, allowNull: false },
     user_id: { type: DataTypes.UUID, allowNull: false },
-    amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false }
+    amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
+    payment_method_id: { type: DataTypes.UUID, allowNull: true },
+    status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'pending' },
+    transaction_id: { type: DataTypes.STRING, allowNull: true },
+    failure_reason: { type: DataTypes.TEXT, allowNull: true },
+    processed_at: { type: DataTypes.DATE, allowNull: true }
 }, { sequelize, tableName: 'payments', timestamps: false });
 
 export interface LedgerEntryAttributes { id: string; group_id: string; user_id: string | null; type: string; amount: number; description: string | null; created_at: Date; }

@@ -5,9 +5,12 @@ import { useSocket } from '../hooks/useSocket'
 interface AuctionParticipationModalProps {
     groupId: string
     groupName: string
-    groupAmount: number
-    auctionStartAt: string
-    auctionEndAt: string
+    groupAmount?: number
+    minimumBid?: number
+    commission?: number
+    auctionStartAt: string | null
+    auctionEndAt: string | null
+    nextAuctionDate?: string | null
     onClose: () => void
 }
 
@@ -15,12 +18,56 @@ export default function AuctionParticipationModal({
     groupId,
     groupName,
     groupAmount,
+    minimumBid,
+    commission,
     auctionStartAt,
     auctionEndAt,
+    nextAuctionDate,
     onClose
 }: AuctionParticipationModalProps) {
     const navigate = useNavigate()
     const socket = useSocket()
+
+    const formattedGroupAmount = typeof groupAmount === 'number'
+        ? `₹${groupAmount.toLocaleString('en-IN')}`
+        : '—'
+
+    const formattedMinimumBid = typeof minimumBid === 'number'
+        ? `₹${minimumBid.toLocaleString('en-IN')}`
+        : null
+
+    const formattedCommission = typeof commission === 'number'
+        ? `₹${commission.toLocaleString('en-IN')}`
+        : null
+
+    const startDate = auctionStartAt ? new Date(auctionStartAt) : null
+    const endDate = auctionEndAt ? new Date(auctionEndAt) : null
+    const nextAuction = nextAuctionDate ? new Date(nextAuctionDate) : null
+
+    const formattedStartDate = startDate
+        ? startDate.toLocaleDateString('en-US', {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
+        })
+        : 'TBD'
+
+    const formattedStartTime = startDate
+        ? startDate.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        })
+        : 'TBD'
+
+    const formattedEndTime = endDate
+        ? endDate.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        })
+        : 'TBD'
 
     useEffect(() => {
         if (socket) {
@@ -127,25 +174,50 @@ export default function AuctionParticipationModal({
                     }}>
                         <span style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: '0.875rem', fontWeight: 500 }}>Group Amount:</span>
                         <span style={{ color: '#fff', fontWeight: 700, fontSize: '1.125rem' }}>
-                            ₹{groupAmount.toLocaleString('en-IN')}
+                            {formattedGroupAmount}
                         </span>
                     </div>
+                    {formattedMinimumBid && (
+                        <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: 12,
+                            paddingTop: 12,
+                            borderTop: '1px solid rgba(255, 255, 255, 0.2)'
+                        }}>
+                            <span style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: '0.875rem', fontWeight: 500 }}>Minimum Bid:</span>
+                            <span style={{ color: '#fff', fontWeight: 600 }}>
+                                {formattedMinimumBid}
+                            </span>
+                        </div>
+                    )}
+                    {formattedCommission && (
+                        <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: 12,
+                            paddingTop: 12,
+                            borderTop: '1px solid rgba(255, 255, 255, 0.2)'
+                        }}>
+                            <span style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: '0.875rem', fontWeight: 500 }}>Commission:</span>
+                            <span style={{ color: '#fff', fontWeight: 600 }}>
+                                {formattedCommission}
+                            </span>
+                        </div>
+                    )}
                     <div style={{
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
                         marginBottom: 12,
-                        paddingTop: 12,
-                        borderTop: '1px solid rgba(255, 255, 255, 0.2)'
+                        paddingTop: (formattedMinimumBid || formattedCommission) ? 0 : 12,
+                        borderTop: (formattedMinimumBid || formattedCommission) ? 'none' : '1px solid rgba(255, 255, 255, 0.2)'
                     }}>
                         <span style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: '0.875rem', fontWeight: 500 }}>Auction Date:</span>
                         <span style={{ color: '#fff', fontWeight: 600 }}>
-                            {new Date(auctionStartAt).toLocaleDateString('en-US', {
-                                weekday: 'short',
-                                month: 'short',
-                                day: 'numeric',
-                                year: 'numeric'
-                            })}
+                            {formattedStartDate}
                         </span>
                     </div>
                     <div style={{
@@ -158,13 +230,29 @@ export default function AuctionParticipationModal({
                     }}>
                         <span style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: '0.875rem', fontWeight: 500 }}>Start Time:</span>
                         <span style={{ color: '#fff', fontWeight: 600 }}>
-                            {new Date(auctionStartAt).toLocaleTimeString('en-US', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                hour12: true
-                            })}
+                            {formattedStartTime}
                         </span>
                     </div>
+                    {nextAuction && (
+                        <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: 12,
+                            paddingTop: 8,
+                            borderTop: '1px solid rgba(255, 255, 255, 0.1)'
+                        }}>
+                            <span style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: '0.875rem', fontWeight: 500 }}>Next Auction Date:</span>
+                            <span style={{ color: '#fff', fontWeight: 600 }}>
+                                {nextAuction.toLocaleDateString('en-US', {
+                                    weekday: 'short',
+                                    month: 'short',
+                                    day: 'numeric',
+                                    year: 'numeric'
+                                })}
+                            </span>
+                        </div>
+                    )}
                     <div style={{
                         display: 'flex',
                         justifyContent: 'space-between',
@@ -174,11 +262,7 @@ export default function AuctionParticipationModal({
                     }}>
                         <span style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: '0.875rem', fontWeight: 500 }}>End Time:</span>
                         <span style={{ color: '#fff', fontWeight: 600 }}>
-                            {new Date(auctionEndAt).toLocaleTimeString('en-US', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                hour12: true
-                            })}
+                            {formattedEndTime}
                         </span>
                     </div>
                 </div>

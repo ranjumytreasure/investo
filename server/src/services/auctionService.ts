@@ -43,19 +43,11 @@ export async function openAuction(groupId: string, io: SocketIOServer): Promise<
         }
 
         // Get group features to calculate commission
-        const features = await GroupFeature.findAll({
-            where: { group_id: groupId }
-        });
-
-        // Calculate commission (same as billing_charges)
-        const commission = group.billing_charges || 0;
-        const minimumBid = calculateMinimumBid(group.amount, commission);
-
         // Create GroupAccount with status "open"
         const groupAccount = await GroupAccount.create({
             group_id: groupId,
             auction_amount: 0, // Will be updated when bids are placed
-            commission: commission,
+            commission: Number(group.billing_charges) || 0,
             cash_to_customer: 0,
             balance: 0,
             profit_per_person: 0,
@@ -86,11 +78,12 @@ export async function openAuction(groupId: string, io: SocketIOServer): Promise<
             group_id: groupId,
             group_name: group.name,
             group_account_id: groupAccount.id,
-            minimum_bid: minimumBid,
-            commission: commission,
-            group_amount: group.amount,
+            minimum_bid: Number(group.billing_charges) || 0,
+            commission: Number(group.billing_charges) || 0,
+            group_amount: Number(group.amount),
             auction_start_at: group.auction_start_at ? new Date(group.auction_start_at).toISOString() : null,
             auction_end_at: group.auction_end_at ? new Date(group.auction_end_at).toISOString() : null,
+            next_auction_date: group.next_auction_date ? new Date(group.next_auction_date).toISOString() : null,
             opened_at: new Date().toISOString(),
             message: 'Auction has opened'
         };

@@ -6,11 +6,15 @@
  */
 export function calculateNextAuctionDate(
     currentAuctionDate: Date,
-    frequency: 'weekly' | 'biweekly' | 'monthly' | null
+    frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly' | null
 ): Date {
     const nextDate = new Date(currentAuctionDate);
     
     switch (frequency) {
+        case 'daily':
+            // Add 1 day
+            nextDate.setDate(nextDate.getDate() + 1);
+            break;
         case 'weekly':
             // Add 7 days
             nextDate.setDate(nextDate.getDate() + 7);
@@ -30,6 +34,8 @@ export function calculateNextAuctionDate(
     
     return nextDate;
 }
+
+
 
 
 

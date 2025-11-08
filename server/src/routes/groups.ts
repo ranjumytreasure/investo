@@ -7,12 +7,13 @@ import { Group } from '../models/Group';
 import { GroupUserShare } from '../models/GroupUserShare';
 import { GroupAccount } from '../models/GroupAccount';
 import { Auction } from '../models/Auction';
-import { Receivable } from '../models/Finance';
+import { Receivable, Receipt } from '../models/Finance';
 import { GroupFeature } from '../models/GroupFeature';
 import { FeatureConfig } from '../models/FeatureConfig';
 import { User } from '../models/User';
 import { calculateBillingCharges, calculateFeatureCharge } from '../lib/calculateCharges';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { authenticateToken, AuthRequest, requireAdmin } from '../middleware/auth';
+import { openAuction, closeAuction } from '../services/auctionService';
 // import { sendInvite, sendOTP } from '../lib/twilio'; // Parked for now
 
 function generateOtp(): string {
@@ -127,6 +128,70 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                 }
             } catch (e) {
                 // Token not available or invalid - user not authenticated
+            }
+
+            let isAdminUser = false;
+            if (userId) {
+                try {
+                    const userRecord = await User.findByPk(userId, {
+                        attributes: ['id', 'role']
+                    });
+                    if (userRecord && (userRecord.role === 'admin' || userRecord.role === 'productowner')) {
+                        isAdminUser = true;
+                    }
+                } catch (userFetchError) {
+                    console.error('Error fetching user role for group listing:', userFetchError);
+                }
+            }
+
+            if (userId && isAdminUser) {
+                const groups = await Group.findAll({
+                    where: statusFilter,
+                    attributes: ['id', 'name', 'amount', 'status', 'type', 'next_auction_date', 'auction_frequency', 'number_of_members', 'billing_charges', 'auction_start_at', 'auction_end_at', 'created_by', 'created_at'],
+                    order: [['created_at', 'DESC']]
+                });
+
+                const { GroupAccount } = require('../models/GroupAccount');
+                const groupsWithStats = await Promise.all(
+                    groups.map(async (group) => {
+                        const groupJson = group.toJSON ? group.toJSON() : group;
+                        const totalMembers = groupJson.number_of_members || 0;
+
+                        const addedMembers = await GroupUserShare.count({
+                            where: {
+                                group_id: groupJson.id,
+                                status: { [Op.in]: ['accepted', 'active'] }
+                            }
+                        });
+
+                        const pendingMembers = totalMembers - addedMembers;
+
+                        let auctionStatus: 'open' | 'closed' | 'no_auction' = 'no_auction';
+                        const groupAccount = await GroupAccount.findOne({
+                            where: {
+                                group_id: groupJson.id
+                            },
+                            order: [['created_at', 'DESC']]
+                        });
+
+                        if (groupAccount) {
+                            if (groupAccount.status === 'open') {
+                                auctionStatus = 'open';
+                            } else if (groupAccount.status === 'closed' || groupAccount.status === 'completed') {
+                                auctionStatus = 'closed';
+                            }
+                        }
+
+                        return {
+                            ...groupJson,
+                            added_members: addedMembers,
+                            pending_members: pendingMembers > 0 ? pendingMembers : 0,
+                            auction_status: auctionStatus
+                        };
+                    })
+                );
+
+                return res.json(groupsWithStats);
             }
 
             if (userId) {
@@ -2149,6 +2214,21 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                 return res.status(403).json({ message: 'Invalid share or you do not own this share' });
             }
 
+            // Check if this share has already won a previous auction
+            const previousWinningAccount = await GroupAccount.findOne({
+                where: {
+                    group_id: groupId,
+                    winner_share_id: group_usershare_id,
+                    status: { [Op.in]: ['closed', 'completed'] }
+                }
+            });
+
+            if (previousWinningAccount) {
+                return res.status(403).json({
+                    message: 'This share has already won an earlier auction. Please use another share to participate.'
+                });
+            }
+
             // Find open auction account (models already imported at top)
 
             const groupAccount = await GroupAccount.findOne({
@@ -2403,6 +2483,41 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
         try {
             const { id: groupId } = req.params;
 
+            const group = await Group.findByPk(groupId);
+            if (!group) {
+                return res.status(404).json({ message: 'Group not found' });
+            }
+
+            const groupShares = await GroupUserShare.findAll({
+                where: {
+                    group_id: groupId
+                },
+                attributes: ['id', 'share_percent', 'status']
+            });
+
+            const sharePercentMap = new Map<string, number>();
+            let totalShareUnits = 0;
+
+            for (const share of groupShares) {
+                const percentRaw = Number(share.share_percent);
+                if (!Number.isFinite(percentRaw)) {
+                    continue;
+                }
+
+                sharePercentMap.set(share.id, percentRaw);
+
+                if (share.status === 'accepted' || share.status === 'active') {
+                    totalShareUnits += percentRaw / 100;
+                }
+            }
+
+            if (totalShareUnits <= 0) {
+                const memberCount = Number(group.number_of_members || 0);
+                totalShareUnits = memberCount > 0 ? memberCount : 1;
+            }
+
+            const groupAmountValue = Number(group.amount) || 0;
+
             // Get all group accounts for this group
             const groupAccounts = await GroupAccount.findAll({
                 where: {
@@ -2412,6 +2527,20 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
             });
 
             // Get receivables for payment tracking
+            let currentUserId: string | null = null;
+            if (req.headers['authorization']) {
+                const token = req.headers['authorization'].split(' ')[1];
+                if (token) {
+                    try {
+                        const jwt = require('jsonwebtoken');
+                        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as { sub: string };
+                        currentUserId = decoded.sub || null;
+                    } catch (err) {
+                        currentUserId = null;
+                    }
+                }
+            }
+
             const receivables = await Receivable.findAll({
                 where: {
                     group_id: groupId
@@ -2423,28 +2552,103 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                     },
                     {
                         model: GroupUserShare,
-                        attributes: ['id', 'share_no', 'share_percent', 'user_id'],
+                        attributes: ['id', 'share_no', 'share_percent', 'user_id', 'invited_by'],
                         required: false
                     }
                 ]
             });
 
-            // Calculate payment stats
-            const paidCount = receivables.filter(r => r.status === 'paid').length;
-            const notPaidCount = receivables.filter(r => r.status !== 'paid').length;
+            const receivableIds = receivables.map(r => r.id);
+            const receiptRecords = receivableIds.length > 0
+                ? await Receipt.findAll({
+                    where: {
+                        receivable_id: { [Op.in]: receivableIds }
+                    }
+                })
+                : [];
+
+            const receiptsByReceivable = new Map<string, Receipt[]>();
+            receiptRecords.forEach(receipt => {
+                const list = receiptsByReceivable.get(receipt.receivable_id) || [];
+                list.push(receipt);
+                receiptsByReceivable.set(receipt.receivable_id, list);
+            });
+
+            const inviterIds = Array.from(new Set(
+                receivables
+                    .map(r => ((r as any).GroupUserShare?.invited_by) as string | null)
+                    .filter((id): id is string => Boolean(id))
+            ));
+
+            const inviters = inviterIds.length > 0
+                ? await User.findAll({
+                    where: { id: { [Op.in]: inviterIds } },
+                    attributes: ['id', 'name', 'phone']
+                })
+                : [];
+
+            const inviterMap = new Map(inviters.map(inviter => [inviter.id, inviter]));
 
             // Format account data with payment info
             const accountsData = await Promise.all(
                 groupAccounts.map(async (account, index) => {
                     const accountReceivables = receivables.filter(r => {
-                        // Match receivables to this account (you may need to adjust this logic based on your data model)
-                        return true; // For now, show all receivables for the group
+                        return (r as any).group_account_id === account.id || !(r as any).group_account_id;
                     });
 
-                    // Calculate total due (sum of expected_amount from unpaid receivables)
-                    const totalDue = accountReceivables
-                        .filter(r => r.status !== 'paid')
-                        .reduce((sum, r) => sum + parseFloat(r.expected_amount.toString()), 0);
+                    const profitPerPersonValue = parseFloat(account.profit_per_person?.toString() || '0');
+                    const duePerFullShare = Math.max(0, (groupAmountValue / totalShareUnits) - profitPerPersonValue);
+
+                    const receivablesResponse = accountReceivables.map(r => {
+                        const shareData = (r as any).GroupUserShare;
+                        const shareId = r.group_share_id as string | null;
+                        const sharePercent =
+                            (shareId && sharePercentMap.get(shareId)) ??
+                            (shareData ? Number(shareData.share_percent) : 0);
+                        const shareFraction = Number.isFinite(sharePercent) ? (sharePercent || 0) / 100 : 0;
+                        const calculatedDue = parseFloat((duePerFullShare * shareFraction).toFixed(2));
+                        const baseDue = Number(r.due_amount || calculatedDue);
+
+                        const receipts = receiptsByReceivable.get(r.id) || [];
+                        const paidAmount = receipts
+                            .filter(receipt => receipt.status === 'success')
+                            .reduce((sum, receipt) => sum + Number(receipt.amount), 0);
+                        const remainingAmount = Math.max(0, baseDue - paidAmount);
+
+                        const referrerId = shareData?.invited_by ?? null;
+                        const referrer = referrerId ? inviterMap.get(referrerId) : undefined;
+
+                        return {
+                            id: r.id,
+                            user_id: r.user_id,
+                            user_name: (r as any).User?.name || 'Unknown',
+                            user_phone: (r as any).User?.phone || 'Unknown',
+                            share_no: shareData?.share_no ?? null,
+                            share_percent: Number.isFinite(sharePercent) ? sharePercent : null,
+                            due_amount: Number(baseDue.toFixed(2)),
+                            paid_amount: Number(paidAmount.toFixed(2)),
+                            remaining_amount: Number(remainingAmount.toFixed(2)),
+                            due_date: r.due_date,
+                            status: remainingAmount <= 0 ? 'paid' : r.status,
+                            referrer_id: referrerId,
+                            referrer_name: referrer?.name || null,
+                            referrer_phone: referrer?.phone || null,
+                            receipts: receipts.map(receipt => ({
+                                id: receipt.id,
+                                amount: Number(receipt.amount),
+                                payment_method: receipt.payment_method,
+                                trx_number: receipt.trx_number,
+                                status: receipt.status
+                            }))
+                        };
+                    });
+
+                    const paidCount = receivablesResponse.filter(r => r.status === 'paid').length;
+                    const notPaidCount = receivablesResponse.length - paidCount;
+                    const outstandingTotal = receivablesResponse.reduce((sum, r) => sum + r.remaining_amount, 0);
+                    const currentUserReceivable = currentUserId
+                        ? receivablesResponse.find(r => r.user_id === currentUserId)
+                        : null;
 
                     return {
                         s_no: index + 1,
@@ -2453,23 +2657,16 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                         auction_amount: parseFloat(account.auction_amount.toString()),
                         commission: parseFloat(account.commission.toString()),
                         profit_per_person: parseFloat(account.profit_per_person.toString()),
-                        due: totalDue,
+                        due: parseFloat(duePerFullShare.toFixed(2)),
+                        due_total_outstanding: Number(outstandingTotal.toFixed(2)),
+                        current_user_due: currentUserReceivable ? currentUserReceivable.remaining_amount : 0,
                         cash_to_customer: parseFloat(account.cash_to_customer.toString()),
                         balance: parseFloat(account.balance.toString()),
                         status: account.status,
                         winner_share_id: account.winner_share_id,
-                        paid_count: accountReceivables.filter(r => r.status === 'paid').length,
-                        not_paid_count: accountReceivables.filter(r => r.status !== 'paid').length,
-                        receivables: accountReceivables.map(r => ({
-                            id: r.id,
-                            user_id: r.user_id,
-                            user_name: (r as any).User?.name || 'Unknown',
-                            user_phone: (r as any).User?.phone || 'Unknown',
-                            share_no: (r as any).GroupUserShare?.share_no || null,
-                            expected_amount: parseFloat(r.expected_amount.toString()),
-                            due_date: r.due_date,
-                            status: r.status
-                        }))
+                        paid_count: paidCount,
+                        not_paid_count: notPaidCount,
+                        receivables: receivablesResponse
                     };
                 })
             );
@@ -2478,14 +2675,73 @@ export function registerGroupRoutes(app: Express, io: SocketIOServer) {
                 accounts: accountsData,
                 summary: {
                     total_accounts: groupAccounts.length,
-                    total_paid: paidCount,
-                    total_not_paid: notPaidCount
+                    total_paid: accountsData.reduce((sum, account) => sum + account.paid_count, 0),
+                    total_not_paid: accountsData.reduce((sum, account) => sum + account.not_paid_count, 0)
                 }
             });
         } catch (error: any) {
             console.error('Error fetching group accounts:', error);
             return res.status(400).json({
                 message: error.message || 'Failed to fetch group accounts'
+            });
+        }
+    });
+
+    // Manual admin actions to control auction lifecycle
+    app.post('/admin/auction/open', authenticateToken, requireAdmin, async (req: AuthRequest, res) => {
+        try {
+            const { group_id: groupId } = req.body as { group_id?: string };
+
+            if (!groupId) {
+                return res.status(400).json({ success: false, message: 'group_id is required' });
+            }
+
+            const group = await Group.findByPk(groupId);
+            if (!group) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            await openAuction(groupId, io);
+
+            return res.json({
+                success: true,
+                message: 'Auction open process triggered',
+                group_id: groupId
+            });
+        } catch (error: any) {
+            console.error('Error opening auction manually:', error);
+            return res.status(500).json({
+                success: false,
+                message: error?.message || 'Failed to open auction'
+            });
+        }
+    });
+
+    app.post('/admin/auction/close', authenticateToken, requireAdmin, async (req: AuthRequest, res) => {
+        try {
+            const { group_id: groupId } = req.body as { group_id?: string };
+
+            if (!groupId) {
+                return res.status(400).json({ success: false, message: 'group_id is required' });
+            }
+
+            const group = await Group.findByPk(groupId);
+            if (!group) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            await closeAuction(groupId, io);
+
+            return res.json({
+                success: true,
+                message: 'Auction close process triggered',
+                group_id: groupId
+            });
+        } catch (error: any) {
+            console.error('Error closing auction manually:', error);
+            return res.status(500).json({
+                success: false,
+                message: error?.message || 'Failed to close auction'
             });
         }
     });

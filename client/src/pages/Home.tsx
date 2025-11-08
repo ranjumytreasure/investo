@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
 import { useLanguage } from '../state/LanguageContext'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import LoadingBar from '../components/LoadingBar'
 import AuctionParticipationModal from '../components/AuctionParticipationModal'
 import { useSocket } from '../hooks/useSocket'
@@ -27,12 +27,12 @@ interface LiveAuction {
     group_id: string
     group_name: string
     group_account_id: string
-    minimum_bid: number
-    commission: number
-    group_amount: number
-    opened_at: string
-    auction_start_at: string
-    auction_end_at: string
+    minimum_bid?: number
+    commission?: number
+    group_amount?: number
+    opened_at?: string | null
+    auction_start_at?: string | null
+    auction_end_at?: string | null
     message?: string
 }
 
@@ -53,6 +53,13 @@ function getUserIdFromToken(token: string | null): string | null {
     }
 }
 
+function formatList(items: string[]): string {
+    if (items.length === 0) return ''
+    if (items.length === 1) return items[0]
+    if (items.length === 2) return `${items[0]} and ${items[1]}`
+    return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
+}
+
 export default function Home() {
     const { state, dispatch } = useAuth()
     const { t } = useLanguage()
@@ -70,7 +77,7 @@ export default function Home() {
         phone: state.phone
     })
     const [groupTab, setGroupTab] = useState<'all' | 'inprogress' | 'new' | 'closed'>('all')
-    const [groupView, setGroupView] = useState<'card' | 'list'>('card') // View mode: card or list
+    const [groupView, setGroupView] = useState<'card' | 'list'>('list') // View mode: card or list
     const [groups, setGroups] = useState<Group[]>([])
     const [allGroups, setAllGroups] = useState<Group[]>([]) // Store all groups for counts
     const [loading, setLoading] = useState(true)
@@ -98,12 +105,17 @@ export default function Home() {
     } | null>(null)
     const [liveAuctions, setLiveAuctions] = useState<LiveAuction[]>([])
     const [participationModal, setParticipationModal] = useState<{
-        groupId: string
-        groupName: string
-        groupAmount: number
-        auctionStartAt: string
-        auctionEndAt: string
+        group_id: string
+        group_name: string
+        group_account_id: string
+        group_amount?: number
+        minimum_bid?: number
+        commission?: number
+        auction_start_at?: string | null
+        auction_end_at?: string | null
+        next_auction_date?: string | null
     } | null>(null)
+    const [hasPaymentMethod, setHasPaymentMethod] = useState(false)
     const socket = useSocket()
 
     // Fetch all groups for counts
@@ -116,6 +128,46 @@ export default function Home() {
             setGroups([])
             setAllGroups([])
             setLoading(false)
+        }
+    }, [isLoggedIn, state.token])
+
+    useEffect(() => {
+        if (!isLoggedIn) {
+            setHasPaymentMethod(false)
+            return
+        }
+
+        const token = state.token || localStorage.getItem('token')
+        if (!token) {
+            setHasPaymentMethod(false)
+            return
+        }
+
+        let cancelled = false
+        fetch('/payment-methods', {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        })
+            .then(async (res) => {
+                if (!res.ok) {
+                    throw new Error(`Failed to load payment methods: ${res.status}`)
+                }
+                return res.json()
+            })
+            .then((data) => {
+                if (cancelled) return
+                const methods = Array.isArray(data?.paymentMethods) ? data.paymentMethods : []
+                setHasPaymentMethod(methods.some((method: { active?: boolean }) => Boolean(method?.active)))
+            })
+            .catch((err) => {
+                if (cancelled) return
+                console.error('Error fetching payment methods:', err)
+                setHasPaymentMethod(false)
+            })
+
+        return () => {
+            cancelled = true
         }
     }, [isLoggedIn, state.token])
 
@@ -276,11 +328,15 @@ export default function Home() {
             // ALWAYS show modal when auction:opened event is received (WebSocket is reliable)
             console.log('[Auction Status] Setting participation modal...')
             setParticipationModal({
-                groupId: data.group_id,
-                groupName: data.group_name || 'Unknown Group',
-                groupAmount: data.group_amount || 0,
-                auctionStartAt: data.auction_start_at || new Date().toISOString(),
-                auctionEndAt: data.auction_end_at || new Date(Date.now() + 3600000).toISOString() // Default 1 hour from now
+                group_id: data.group_id,
+                group_name: data.group_name || 'Unknown Group',
+                group_account_id: data.group_account_id,
+                group_amount: typeof data.group_amount === 'number' ? data.group_amount : Number(data.group_amount),
+                minimum_bid: typeof data.minimum_bid === 'number' ? data.minimum_bid : Number(data.minimum_bid),
+                commission: data.commission,
+                auction_start_at: data.auction_start_at || data.opened_at || null,
+                auction_end_at: data.auction_end_at || null,
+                next_auction_date: data.next_auction_date || null
             })
             console.log('[Auction Status] Participation modal set!')
 
@@ -343,7 +399,7 @@ export default function Home() {
             
             // Close modal - use functional update to access current state
             setParticipationModal(prev => {
-                if (prev && prev.groupId === data.group_id) {
+                if (prev && prev.group_id === data.group_id) {
                     console.log('[Auction Status] Closing participation modal for closed auction')
                     return null
                 }
@@ -443,7 +499,7 @@ export default function Home() {
             if (!token) return
 
             try {
-                const auctionResponse = await fetch(`/groups/${participationModal.groupId}/auction`, {
+                const auctionResponse = await fetch(`/groups/${participationModal.group_id}/auction`, {
                     headers: {
                         'Authorization': `Bearer ${token}`
                     }
@@ -528,28 +584,6 @@ export default function Home() {
         })
     }
 
-    function calculateProfileCompletion(): number {
-        if (!profileData) return 5 // Default minimum
-        
-        let percentage = 0
-        
-        // Phone: 20% (required, they're logged in)
-        if (profileData.phone) percentage += 20
-        
-        // Name: 20%
-        if (profileData.name && profileData.name.trim()) percentage += 20
-        
-        // Email: 20%
-        if (profileData.email && profileData.email.trim()) percentage += 20
-        
-        // Address: 20% (at least one address)
-        if (profileData.addressCount > 0) percentage += 20
-        
-        // KYC Verified: 20%
-        if (profileData.kyc_verified) percentage += 20
-        
-        return Math.min(percentage, 100)
-    }
 
     async function fetchAllGroups() {
         const token = state.token || localStorage.getItem('token')
@@ -691,15 +725,55 @@ export default function Home() {
         hasToken: !!state.token
     })
     
+    const displayName = (() => {
+        if (profileData?.name && profileData.name.trim()) {
+            return profileData.name.trim()
+        }
+        if (state.name && state.name.trim()) {
+            return state.name.trim()
+        }
+        if (profileData?.phone && profileData.phone.trim()) {
+            return profileData.phone.trim()
+        }
+        if (state.phone) {
+            return state.phone
+        }
+        return null
+    })()
+
+    const essentialSteps = useMemo(() => {
+        const profileComplete = Boolean(
+            profileData &&
+            profileData.name && profileData.name.trim() &&
+            profileData.email && profileData.email.trim() &&
+            profileData.addressCount > 0
+        )
+        const verifyComplete = Boolean(profileData?.kyc_verified)
+        const paymentComplete = hasPaymentMethod
+
+        return [
+            { key: 'profile', label: 'Update Profile', completed: profileComplete },
+            { key: 'verify', label: 'Verify Account', completed: verifyComplete },
+            { key: 'payment', label: 'Add Payment Method', completed: paymentComplete }
+        ]
+    }, [profileData, hasPaymentMethod])
+
+    const totalSteps = essentialSteps.length || 1
+    const completedSteps = essentialSteps.filter(step => step.completed).length
+    const completionPercentage = Math.round((completedSteps / totalSteps) * 100)
+    const canStartGroup = completionPercentage === 100
+    const incompleteSteps = essentialSteps.filter(step => !step.completed)
+    const guidanceText = canStartGroup
+        ? 'Onboarding complete! You can start a group or join invitations instantly.'
+        : `Finish ${formatList(incompleteSteps.map(step => step.label))} to reach 100% and unlock group participation.`
+    const progressWidth = Math.max(0, Math.min(completionPercentage, 100))
+
     return (
         <>
             {loading && <LoadingBar />}
             <div style={{ maxWidth: '1800px', margin: '24px auto', padding: '24px 48px' }}>
                 {/* Combined Welcome + Live Auctions Section */}
                 {isLoggedIn ? (() => {
-                    const completionPercentage = calculateProfileCompletion()
-                    const canStartGroup = completionPercentage === 100
-                    
                     return (
                         <section style={{ marginBottom: 24 }}>
                             <div style={{ 
@@ -715,41 +789,38 @@ export default function Home() {
                                         <div style={{ fontSize: '2rem' }}>👋</div>
                                         <div style={{ flex: 1 }}>
                                             <h2 style={{ margin: 0, marginBottom: 4, fontSize: '1.5rem', fontWeight: 700, color: '#1e293b' }}>
-                                                Welcome{state.phone ? `, ${state.phone}` : ''}
+                                                Welcome{displayName ? `, ${displayName}` : ''}
                                             </h2>
                                             <p style={{ margin: 0, color: '#64748b', fontSize: '0.875rem' }}>
-                                                Profile completion: <strong style={{ color: '#1e293b' }}>{completionPercentage}%</strong>
+                                                Profile completion: <strong style={{ color: '#1e293b' }}>{progressWidth}%</strong>
                                             </p>
                                         </div>
                                     </div>
                                     <div style={{ height: 8, background: '#f1f5f9', borderRadius: 9999, overflow: 'hidden', marginBottom: 16 }}>
                                         <div style={{ 
-                                            width: `${completionPercentage}%`, 
+                                            width: `${progressWidth}%`, 
                                             height: '100%', 
-                                            background: completionPercentage === 100 ? '#16a34a' : '#2563eb',
+                                            background: canStartGroup ? '#16a34a' : '#2563eb',
                                             transition: 'width 0.3s ease',
                                             borderRadius: 9999
                                         }} />
                                     </div>
                                     <p style={{ margin: '0 0 16px 0', color: '#475569', fontSize: '0.875rem', lineHeight: 1.6 }}>
-                                        {completionPercentage < 100 ? (
-                                            <>Update phone, address, and complete KYC to reach 100%. Only at 100% you can start a group.</>
-                                        ) : (
-                                            <>Your profile is complete! You can now start a group.</>
-                                        )}
-                                    </p>
+                                                {guidanceText}
+                                            </p>
                                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                                         <Link 
                                             to="/profile" 
                                             style={{ 
-                                                padding: '8px 16px', 
+                                                padding: '10px 18px', 
                                                 border: '1px solid #cbd5e1', 
-                                                borderRadius: 8,
-                                                fontSize: '0.875rem',
+                                                borderRadius: 10,
+                                                fontSize: '0.9rem',
                                                 textDecoration: 'none',
                                                 color: '#475569',
                                                 fontWeight: 500,
-                                                transition: 'all 0.2s'
+                                                transition: 'all 0.2s',
+                                                backdropFilter: 'blur(4px)'
                                             }}
                                             onMouseEnter={(e) => {
                                                 e.currentTarget.style.background = '#f8fafc'
@@ -765,24 +836,55 @@ export default function Home() {
                                         <Link 
                                             to="/verify" 
                                             style={{ 
-                                                padding: '8px 16px', 
-                                                background: '#16a34a', 
+                                                padding: '10px 18px', 
+                                                background: 'linear-gradient(90deg, #16a34a 0%, #22c55e 100%)', 
                                                 color: '#fff', 
-                                                borderRadius: 8, 
-                                                border: '1px solid #15803d',
-                                                fontSize: '0.875rem',
+                                                borderRadius: 10, 
+                                                border: '1px solid rgba(255,255,255,0.2)',
+                                                fontSize: '0.9rem',
                                                 textDecoration: 'none',
-                                                fontWeight: 500,
+                                                fontWeight: 600,
+                                                boxShadow: '0 10px 20px rgba(34,197,94,0.25)',
                                                 transition: 'all 0.2s'
                                             }}
                                             onMouseEnter={(e) => {
-                                                e.currentTarget.style.background = '#15803d'
+                                                e.currentTarget.style.transform = 'translateY(-2px)'
+                                                e.currentTarget.style.boxShadow = '0 14px 28px rgba(34,197,94,0.3)'
                                             }}
                                             onMouseLeave={(e) => {
-                                                e.currentTarget.style.background = '#16a34a'
+                                                e.currentTarget.style.transform = 'none'
+                                                e.currentTarget.style.boxShadow = '0 10px 20px rgba(34,197,94,0.25)'
                                             }}
                                         >
                                             Verify Account
+                                        </Link>
+                                        <Link
+                                            to="/payments"
+                                            style={{
+                                                padding: '10px 18px',
+                                                background: 'linear-gradient(90deg, #0ea5e9 0%, #6366f1 100%)',
+                                                color: '#fff',
+                                                borderRadius: 10,
+                                                border: 'none',
+                                                fontSize: '0.9rem',
+                                                fontWeight: 600,
+                                                textDecoration: 'none',
+                                                boxShadow: '0 10px 25px rgba(79,70,229,0.25)',
+                                                transition: 'all 0.2s',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: 8
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                e.currentTarget.style.transform = 'translateY(-2px)'
+                                                e.currentTarget.style.boxShadow = '0 14px 32px rgba(79,70,229,0.3)'
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                e.currentTarget.style.transform = 'none'
+                                                e.currentTarget.style.boxShadow = '0 10px 25px rgba(79,70,229,0.25)'
+                                            }}
+                                        >
+                                            <span style={{ fontSize: '1rem' }}>➕</span> Add Payment Method
                                         </Link>
                                         {canStartGroup ? (
                                             <Link 
@@ -820,11 +922,32 @@ export default function Home() {
                                                     fontSize: '0.875rem',
                                                     fontWeight: 500
                                                 }}
-                                                title="Complete your profile to 100% to start a group"
+                                                title="Complete onboarding to unlock group participation"
                                             >
-                                                Start a group
+                                                Complete onboarding to unlock groups
                                             </button>
                                         )}
+                                    </div>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
+                                        {essentialSteps.map(step => (
+                                            <span
+                                                key={step.key}
+                                                style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: 6,
+                                                    padding: '6px 10px',
+                                                    borderRadius: 999,
+                                                    background: step.completed ? 'rgba(22, 163, 74, 0.16)' : 'rgba(148, 163, 184, 0.16)',
+                                                    color: step.completed ? '#166534' : '#475569',
+                                                    fontSize: '0.75rem',
+                                                    fontWeight: 600,
+                                                    letterSpacing: 0.3
+                                                }}
+                                            >
+                                                {step.completed ? '✅' : '⏳'} {step.label}
+                                            </span>
+                                        ))}
                                     </div>
                                 </div>
                             </div>
@@ -1084,50 +1207,8 @@ export default function Home() {
                                                         )}
 
                                                         {/* Auction Status Badge for inprogress groups */}
-                                                        {group.status === 'inprogress' && group.auction_status && (
-                                                            <div style={{ flex: '0 0 auto' }}>
-                                                                {group.auction_status === 'open' ? (
-                                                                    <div
-                                                                        className="live-auction-open"
-                                                                        style={{
-                                                                            padding: '6px 12px',
-                                                                            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                                                                            color: '#fff',
-                                                                            borderRadius: 6,
-                                                                            fontSize: '0.75rem',
-                                                                            fontWeight: 700,
-                                                                            boxShadow: '0 2px 8px rgba(16, 185, 129, 0.4)',
-                                                                            whiteSpace: 'nowrap',
-                                                                            animation: 'live-auction-pulse 2s infinite',
-                                                                            display: 'flex',
-                                                                            alignItems: 'center',
-                                                                            gap: 6
-                                                                        }}
-                                                                    >
-                                                                        <span style={{ 
-                                                                            animation: 'live-auction-blink 1.5s infinite'
-                                                                        }}>🔴</span>
-                                                                        <span style={{ animation: 'live-auction-text-glow 2s infinite' }}>
-                                                                            LIVE
-                                                                        </span>
-                                                                    </div>
-                                                                ) : group.auction_status === 'closed' ? (
-                                                                    <div
-                                                                        style={{
-                                                                            padding: '6px 12px',
-                                                                            background: '#fee2e2',
-                                                                            color: '#dc2626',
-                                                                            borderRadius: 6,
-                                                                            fontSize: '0.75rem',
-                                                                            fontWeight: 700,
-                                                                            border: '2px solid #dc2626',
-                                                                            whiteSpace: 'nowrap'
-                                                                        }}
-                                                                    >
-                                                                        Closed
-                                                                    </div>
-                                                                ) : null}
-                                                            </div>
+                                                        {group.status === 'inprogress' && (
+                                                        null
                                                         )}
 
                                                         {/* Actions */}
@@ -1202,7 +1283,7 @@ export default function Home() {
                                                                                         borderRadius: 6,
                                                                                         fontWeight: 700,
                                                                                         whiteSpace: 'nowrap',
-                                                                                        border: '1px solid #dc2626'
+                                                                                        border: '2px solid #dc2626'
                                                                                     }}
                                                                                 >
                                                                                     Auction Closed
@@ -1595,11 +1676,14 @@ export default function Home() {
             {/* Participation Modal */}
             {participationModal && (
                 <AuctionParticipationModal
-                    groupId={participationModal.groupId}
-                    groupName={participationModal.groupName}
-                    groupAmount={participationModal.groupAmount}
-                    auctionStartAt={participationModal.auctionStartAt}
-                    auctionEndAt={participationModal.auctionEndAt}
+                    groupId={participationModal.group_id}
+                    groupName={participationModal.group_name}
+                    groupAmount={participationModal.group_amount}
+                    minimumBid={participationModal.minimum_bid}
+                    commission={participationModal.commission}
+                    auctionStartAt={participationModal.auction_start_at ?? null}
+                    auctionEndAt={participationModal.auction_end_at ?? null}
+                    nextAuctionDate={participationModal.next_auction_date ?? null}
                     onClose={() => setParticipationModal(null)}
                 />
             )}

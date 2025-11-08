@@ -11,6 +11,10 @@ export default defineConfig({
       '/auth': 'http://localhost:4000',
       '/admin': 'http://localhost:4000',
       '/profile': 'http://localhost:4000',
+      '/verify': 'http://localhost:4000',
+      '/payment-methods': 'http://localhost:4000',
+      '/payables': 'http://localhost:4000',
+      '/payments': 'http://localhost:4000',
       // Proxy /groups API endpoints - be specific to avoid proxying frontend routes
       '/groups': {
         target: 'http://localhost:4000',

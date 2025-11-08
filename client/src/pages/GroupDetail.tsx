@@ -3,6 +3,9 @@ import { Link, useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
 import LoadingBar from '../components/LoadingBar'
 import Auction from '../components/Auction'
+import AuctionParticipationModal from '../components/AuctionParticipationModal'
+import ReceivablePaymentModal from '../components/ReceivablePaymentModal'
+import PaymentProgressModal from '../components/PaymentProgressModal'
 
 // Helper function to decode JWT token and get user ID
 function getUserIdFromToken(token: string | null): string | null {
@@ -85,6 +88,8 @@ export default function GroupDetail() {
     const navigate = useNavigate()
     const location = useLocation()
     const { state } = useAuth()
+    const currentToken = state.token || (typeof window !== 'undefined' ? localStorage.getItem('token') : null)
+    const currentUserId = getUserIdFromToken(currentToken)
     const [groupDetail, setGroupDetail] = useState<GroupDetail | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -103,13 +108,27 @@ export default function GroupDetail() {
     const [editAuctionError, setEditAuctionError] = useState<string | null>(null)
     const [accountDetails, setAccountDetails] = useState<any>(null)
     const [loadingAccounts, setLoadingAccounts] = useState(false)
-    const [showPaymentDetails, setShowPaymentDetails] = useState<string | null>(null) // account_id to show payment details
+    const [activeReceivable, setActiveReceivable] = useState<any | null>(null)
+    const [paymentProgressAccount, setPaymentProgressAccount] = useState<any | null>(null)
+    const [auctionActionLoading, setAuctionActionLoading] = useState(false)
+    const [auctionActionMessage, setAuctionActionMessage] = useState<string | null>(null)
+    const [auctionActionError, setAuctionActionError] = useState<string | null>(null)
 
     useEffect(() => {
         if (id) {
             fetchGroupDetail()
         }
     }, [id])
+
+    useEffect(() => {
+        if (auctionActionMessage || auctionActionError) {
+            const timer = setTimeout(() => {
+                setAuctionActionMessage(null)
+                setAuctionActionError(null)
+            }, 5000)
+            return () => clearTimeout(timer)
+        }
+    }, [auctionActionMessage, auctionActionError])
 
     useEffect(() => {
         if (id && groupDetail && groupDetail.group.status === 'inprogress') {
@@ -177,6 +196,45 @@ export default function GroupDetail() {
             console.error('Error fetching account details:', err)
         } finally {
             setLoadingAccounts(false)
+        }
+    }
+
+    async function handleAuctionAction(action: 'open' | 'close') {
+        if (!state.token || !id) {
+            setAuctionActionError('You must be logged in as an admin to perform this action.')
+            return
+        }
+
+        setAuctionActionLoading(true)
+        setAuctionActionError(null)
+        setAuctionActionMessage(null)
+
+        try {
+            const response = await fetch(`/admin/auction/${action}`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${state.token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ group_id: id })
+            })
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}))
+                throw new Error(errorData.message || `Failed to ${action} auction`)
+            }
+
+            const result = await response.json()
+            setAuctionActionMessage(result.message || `Auction ${action === 'open' ? 'opened' : 'closed'} successfully`)
+
+            // Refresh data to reflect the new state
+            await fetchGroupDetail()
+            await fetchAccountDetails()
+        } catch (err: any) {
+            console.error(`Error trying to ${action} auction:`, err)
+            setAuctionActionError(err.message || `Failed to ${action} auction`)
+        } finally {
+            setAuctionActionLoading(false)
         }
     }
 
@@ -461,6 +519,7 @@ export default function GroupDetail() {
     const maxAvailablePercent = Math.max(...Array.from(shareAvailability.values()))
     const amount = parseFloat(group.amount.toString())
     const billingCharges = parseFloat(group.billing_charges.toString())
+    const isAdminUser = state.role === 'admin' || state.role === 'productowner'
 
     // Helper function to get user initials
     function getInitials(nameOrPhone: string): string {
@@ -533,6 +592,46 @@ export default function GroupDetail() {
                             >
                                 ⚙️ Manage Features
                             </Link>
+                            {isAdminUser && (
+                                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                    <button
+                                        onClick={() => handleAuctionAction('open')}
+                                        disabled={auctionActionLoading}
+                                        style={{
+                                            padding: '8px 16px',
+                                            fontSize: '0.875rem',
+                                            background: '#16a34a',
+                                            color: '#fff',
+                                            borderRadius: 6,
+                                            border: 'none',
+                                            cursor: auctionActionLoading ? 'not-allowed' : 'pointer',
+                                            fontWeight: 600,
+                                            opacity: auctionActionLoading ? 0.7 : 1,
+                                            transition: 'all 0.2s'
+                                        }}
+                                    >
+                                        {auctionActionLoading ? 'Processing...' : 'Open Auction'}
+                                    </button>
+                                    <button
+                                        onClick={() => handleAuctionAction('close')}
+                                        disabled={auctionActionLoading}
+                                        style={{
+                                            padding: '8px 16px',
+                                            fontSize: '0.875rem',
+                                            background: '#dc2626',
+                                            color: '#fff',
+                                            borderRadius: 6,
+                                            border: 'none',
+                                            cursor: auctionActionLoading ? 'not-allowed' : 'pointer',
+                                            fontWeight: 600,
+                                            opacity: auctionActionLoading ? 0.7 : 1,
+                                            transition: 'all 0.2s'
+                                        }}
+                                    >
+                                        {auctionActionLoading ? 'Processing...' : 'Close Auction'}
+                                    </button>
+                                </div>
+                            )}
                             {isNewGroup && (
                                 <button
                                     onClick={handleDelete}
@@ -598,6 +697,23 @@ export default function GroupDetail() {
                     )}
                 </div>
             </div>
+
+            {isAdminUser && (auctionActionMessage || auctionActionError) && (
+                <div
+                    style={{
+                        marginBottom: 16,
+                        padding: '12px 16px',
+                        borderRadius: 8,
+                        border: `1px solid ${auctionActionError ? '#fecaca' : '#bbf7d0'}`,
+                        background: auctionActionError ? '#fef2f2' : '#f0fdf4',
+                        color: auctionActionError ? '#b91c1c' : '#166534',
+                        fontSize: '0.875rem',
+                        fontWeight: 500
+                    }}
+                >
+                    {auctionActionError || auctionActionMessage}
+                </div>
+            )}
 
             {/* Dashboard KPI Cards - Top Row - Horizontal Layout - Condensed */}
             {group.status !== 'inprogress' && (
@@ -849,147 +965,95 @@ export default function GroupDetail() {
                                                     <td style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', color: '#16a34a', fontWeight: 600 }}>
                                                         ₹{account.profit_per_person.toLocaleString('en-IN')}
                                                     </td>
-                                                    <td style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', color: '#dc2626', fontWeight: 600 }}>
-                                                        ₹{account.due.toLocaleString('en-IN')}
+                                                    <td style={{ padding: '12px', textAlign: 'right' }}>
+                                                        {account.receivables.some((r: any) => r.user_id === currentUserId) ? (
+                                                            account.current_user_due > 0 ? (
+                                                                <button
+                                                                    onClick={() => {
+                                                                        const receivable = account.receivables.find((r: any) => r.user_id === currentUserId)
+                                                                        if (receivable) {
+                                                                            setActiveReceivable({
+                                                                                id: receivable.id,
+                                                                                user_name: receivable.user_name,
+                                                                                user_phone: receivable.user_phone,
+                                                                                share_no: receivable.share_no,
+                                                                                due_amount: receivable.due_amount,
+                                                                                paid_amount: receivable.paid_amount,
+                                                                                remaining_amount: receivable.remaining_amount
+                                                                            })
+                                                                        }
+                                                                    }}
+                                                                    style={{
+                                                                        fontSize: '0.85rem',
+                                                                        fontWeight: 700,
+                                                                        color: '#fff',
+                                                                        background: '#dc2626',
+                                                                        border: 'none',
+                                                                        borderRadius: 9999,
+                                                                        padding: '6px 14px',
+                                                                        display: 'inline-flex',
+                                                                        alignItems: 'center',
+                                                                        justifyContent: 'center',
+                                                                        cursor: 'pointer',
+                                                                        boxShadow: '0 4px 10px rgba(220, 38, 38, 0.25)',
+                                                                        transition: 'background 0.2s ease'
+                                                                    }}
+                                                                    onMouseEnter={(e) => {
+                                                                        e.currentTarget.style.background = '#b91c1c'
+                                                                    }}
+                                                                    onMouseLeave={(e) => {
+                                                                        e.currentTarget.style.background = '#dc2626'
+                                                                    }}
+                                                                >
+                                                                    Pay ₹{account.current_user_due.toLocaleString('en-IN')}
+                                                                </button>
+                                                            ) : (
+                                                                <span style={{
+                                                                    fontSize: '0.875rem',
+                                                                    fontWeight: 700,
+                                                                    color: '#16a34a',
+                                                                    background: '#dcfce7',
+                                                                    borderRadius: 9999,
+                                                                    padding: '6px 12px',
+                                                                    display: 'inline-block'
+                                                                }}>
+                                                                    Paid ₹{account.receivables.find((r: any) => r.user_id === currentUserId)?.paid_amount.toLocaleString('en-IN') || '0'}
+                                                                </span>
+                                                            )
+                                                        ) : (
+                                                            <span style={{ fontSize: '0.875rem', color: '#64748b' }}>—</span>
+                                                        )}
                                                     </td>
                                                     <td style={{ padding: '12px', textAlign: 'right', fontSize: '0.875rem', color: '#2563eb', fontWeight: 600 }}>
                                                         ₹{account.cash_to_customer.toLocaleString('en-IN')}
                                                     </td>
                                                     <td style={{ padding: '12px', textAlign: 'center' }}>
-                                                        <div
-                                                            onClick={() => setShowPaymentDetails(showPaymentDetails === account.account_id ? null : account.account_id)}
-                                                            style={{
-                                                                cursor: 'pointer',
-                                                                padding: '8px 12px',
-                                                                background: '#f8fafc',
-                                                                borderRadius: 8,
-                                                                border: '1px solid #e5e7eb',
-                                                                transition: 'all 0.2s',
-                                                                minWidth: '200px'
-                                                            }}
-                                                            onMouseEnter={(e) => {
-                                                                e.currentTarget.style.background = '#f1f5f9'
-                                                                e.currentTarget.style.borderColor = '#cbd5e1'
-                                                            }}
-                                                            onMouseLeave={(e) => {
-                                                                e.currentTarget.style.background = '#f8fafc'
-                                                                e.currentTarget.style.borderColor = '#e5e7eb'
-                                                            }}
-                                                        >
-                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                                                                <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 500 }}>
-                                                                    {account.paid_count} paid / {account.paid_count + account.not_paid_count} total
-                                                                </span>
-                                                                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                                                    {showPaymentDetails === account.account_id ? '▼' : '▶'}
-                                                                </span>
-                                                            </div>
-                                                            <div style={{
-                                                                height: 8,
-                                                                background: '#e5e7eb',
-                                                                borderRadius: 9999,
-                                                                overflow: 'hidden',
-                                                                position: 'relative'
-                                                            }}>
-                                                                <div style={{
-                                                                    width: `${((account.paid_count) / (account.paid_count + account.not_paid_count || 1)) * 100}%`,
-                                                                    height: '100%',
-                                                                    background: account.not_paid_count === 0 
-                                                                        ? '#16a34a' 
-                                                                        : 'linear-gradient(90deg, #16a34a 0%, #f59e0b 100%)',
-                                                                    borderRadius: 9999,
-                                                                    transition: 'width 0.3s ease'
-                                                                }} />
-                                                            </div>
-                                                            {showPaymentDetails === account.account_id && account.receivables && account.receivables.length > 0 && (
-                                                                <div style={{
-                                                                    marginTop: 12,
-                                                                    padding: 12,
-                                                                    background: '#ffffff',
-                                                                    borderRadius: 8,
-                                                                    border: '1px solid #e5e7eb',
-                                                                    maxHeight: '300px',
-                                                                    overflowY: 'auto'
-                                                                }}>
-                                                                    <div style={{ marginBottom: 12 }}>
-                                                                        <h4 style={{ margin: '0 0 8px 0', fontSize: '0.875rem', fontWeight: 700, color: '#1e293b' }}>
-                                                                            Paid ({account.paid_count})
-                                                                        </h4>
-                                                                        {account.receivables.filter((r: any) => r.status === 'paid').length > 0 ? (
-                                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                                                                {account.receivables.filter((r: any) => r.status === 'paid').map((r: any) => (
-                                                                                    <div key={r.id} style={{
-                                                                                        padding: '8px 12px',
-                                                                                        background: '#f0fdf4',
-                                                                                        borderRadius: 6,
-                                                                                        border: '1px solid #bbf7d0',
-                                                                                        display: 'flex',
-                                                                                        justifyContent: 'space-between',
-                                                                                        alignItems: 'center'
-                                                                                    }}>
-                                                                                        <div>
-                                                                                            <div style={{ fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
-                                                                                                {r.user_name} {r.share_no ? `(Share #${r.share_no})` : ''}
-                                                                                            </div>
-                                                                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                                                                                {r.user_phone}
-                                                                                            </div>
-                                                                                        </div>
-                                                                                        <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#16a34a' }}>
-                                                                                            ₹{r.expected_amount.toLocaleString('en-IN')}
-                                                                                        </div>
-                                                                                    </div>
-                                                                                ))}
-                                                                            </div>
-                                                                        ) : (
-                                                                            <div style={{ fontSize: '0.875rem', color: '#64748b', fontStyle: 'italic' }}>
-                                                                                No payments received yet
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                    <div>
-                                                                        <h4 style={{ margin: '0 0 8px 0', fontSize: '0.875rem', fontWeight: 700, color: '#1e293b' }}>
-                                                                            Not Paid ({account.not_paid_count})
-                                                                        </h4>
-                                                                        {account.receivables.filter((r: any) => r.status !== 'paid').length > 0 ? (
-                                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                                                                {account.receivables.filter((r: any) => r.status !== 'paid').map((r: any) => (
-                                                                                    <div key={r.id} style={{
-                                                                                        padding: '8px 12px',
-                                                                                        background: '#fef2f2',
-                                                                                        borderRadius: 6,
-                                                                                        border: '1px solid #fecaca',
-                                                                                        display: 'flex',
-                                                                                        justifyContent: 'space-between',
-                                                                                        alignItems: 'center'
-                                                                                    }}>
-                                                                                        <div>
-                                                                                            <div style={{ fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
-                                                                                                {r.user_name} {r.share_no ? `(Share #${r.share_no})` : ''}
-                                                                                            </div>
-                                                                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                                                                                {r.user_phone}
-                                                                                            </div>
-                                                                                            {r.due_date && (
-                                                                                                <div style={{ fontSize: '0.75rem', color: '#dc2626', marginTop: 2 }}>
-                                                                                                    Due: {new Date(r.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                                                                                                </div>
-                                                                                            )}
-                                                                                        </div>
-                                                                                        <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#dc2626' }}>
-                                                                                            ₹{r.expected_amount.toLocaleString('en-IN')}
-                                                                                        </div>
-                                                                                    </div>
-                                                                                ))}
-                                                                            </div>
-                                                                        ) : (
-                                                                            <div style={{ fontSize: '0.875rem', color: '#64748b', fontStyle: 'italic' }}>
-                                                                                All payments received
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            )}
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                                            <button
+                                                                onClick={() => setPaymentProgressAccount(account)}
+                                                                style={{
+                                                                    width: '100%',
+                                                                    padding: '10px 16px',
+                                                                    background: '#f1f5f9',
+                                                                    border: '1px solid #e2e8f0',
+                                                                    borderRadius: 10,
+                                                                    fontSize: '0.9rem',
+                                                                    color: '#1e293b',
+                                                                    cursor: 'pointer',
+                                                                    fontWeight: 600,
+                                                                    transition: 'all 0.2s'
+                                                                }}
+                                                                onMouseEnter={(e) => {
+                                                                    e.currentTarget.style.background = '#e2e8f0'
+                                                                    e.currentTarget.style.borderColor = '#cbd5e1'
+                                                                }}
+                                                                onMouseLeave={(e) => {
+                                                                    e.currentTarget.style.background = '#f1f5f9'
+                                                                    e.currentTarget.style.borderColor = '#e2e8f0'
+                                                                }}
+                                                            >
+                                                                View Payment Progress
+                                                            </button>
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -2135,6 +2199,35 @@ export default function GroupDetail() {
                         </div>
                     </div>
                 </>
+            )}
+            {activeReceivable && (
+                <ReceivablePaymentModal
+                    receivable={activeReceivable}
+                    token={currentToken}
+                    onClose={() => setActiveReceivable(null)}
+                    onSuccess={() => {
+                        fetchAccountDetails()
+                    }}
+                />
+            )}
+            {paymentProgressAccount && (
+                <PaymentProgressModal
+                    account={paymentProgressAccount}
+                    currentUserId={currentUserId}
+                    onClose={() => setPaymentProgressAccount(null)}
+                    onPay={(receivable) => {
+                        setPaymentProgressAccount(null)
+                        setActiveReceivable({
+                            id: receivable.id,
+                            user_name: receivable.user_name,
+                            user_phone: receivable.user_phone,
+                            share_no: receivable.share_no,
+                            due_amount: receivable.due_amount,
+                            paid_amount: receivable.paid_amount,
+                            remaining_amount: receivable.remaining_amount
+                        })
+                    }}
+                />
             )}
         </div>
     )

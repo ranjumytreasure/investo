@@ -67,10 +67,12 @@ Group.hasMany(Payable, { foreignKey: 'group_id' });
 Payable.belongsTo(Group, { foreignKey: 'group_id' });
 User.hasMany(Payable, { foreignKey: 'user_id' });
 Payable.belongsTo(User, { foreignKey: 'user_id' });
-Payable.hasMany(Payment, { foreignKey: 'payable_id' });
-Payment.belongsTo(Payable, { foreignKey: 'payable_id' });
+Payable.hasMany(Payment, { foreignKey: 'payable_id', as: 'payments' });
+Payment.belongsTo(Payable, { foreignKey: 'payable_id', as: 'payable' });
 User.hasMany(Payment, { foreignKey: 'user_id' });
 Payment.belongsTo(User, { foreignKey: 'user_id' });
+Payment.belongsTo(PaymentMethod, { foreignKey: 'payment_method_id', as: 'paymentMethod' });
+PaymentMethod.hasMany(Payment, { foreignKey: 'payment_method_id' });
 
 // Group Features
 Group.hasMany(GroupFeature, { foreignKey: 'group_id' });

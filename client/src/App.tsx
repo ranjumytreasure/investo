@@ -18,6 +18,7 @@ import GroupFeatures from './pages/GroupFeatures'
 import GroupDetail from './pages/GroupDetail'
 import GroupInviteView from './pages/GroupInviteView'
 import AuctionPage from './pages/AuctionPage'
+import Payments from './pages/Payments'
 
 function App() {
   return (
@@ -32,6 +33,7 @@ function App() {
         <Route path="/set-pin" element={<><Header /><div style={{ width: '100%', minHeight: 'calc(100vh - 80px)' }}><SetPin /></div></>} />
         <Route path="/dashboard" element={<><Header /><div style={{ width: '100%', minHeight: 'calc(100vh - 80px)' }}><Dashboard /></div></>} />
         <Route path="/profile" element={<><Header /><div style={{ width: '100%', minHeight: 'calc(100vh - 80px)' }}><Profile /></div></>} />
+        <Route path="/payments" element={<><Header /><div style={{ width: '100%', minHeight: 'calc(100vh - 80px)' }}><Payments /></div></>} />
         <Route path="/verify" element={<><Header /><div style={{ width: '100%', minHeight: 'calc(100vh - 80px)' }}><Verify /></div></>} />
         <Route path="/groups/new" element={<><Header /><div style={{ width: '100%', minHeight: 'calc(100vh - 80px)' }}><CreateGroup /></div></>} />
         <Route path="/groups/:id/invite" element={<GroupInviteView />} />
